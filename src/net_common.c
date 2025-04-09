@@ -13,6 +13,7 @@
 // limitations under the License.
 
 #include "net_common.h"
+#include "netbench_config.h"
 #include "util.h"
 #include "stopwatch.h"
 
@@ -28,7 +29,7 @@
 #include <rte_debug.h>
 
 #define MEHCACHED_MBUF_ENTRY_SIZE (2048 + sizeof(struct rte_mbuf) + RTE_PKTMBUF_HEADROOM)
-#define MEHCACHED_MBUF_SIZE (MEHCACHED_MAX_PORTS * MEHCACHED_MAX_QUEUES * 4096)     // TODO: need to divide by numa node count
+#define MEHCACHED_MBUF_SIZE (NUM_PORT * NUM_QUEUE * 4096)     // TODO: need to divide by numa node count
 
 #define MEHCACHED_MAX_PKT_BURST (32)
 
@@ -50,18 +51,19 @@ static uint16_t mehcached_num_tx_desc = RTE_TEST_TX_DESC_DEFAULT;
 
 static const struct rte_eth_conf mehcached_port_conf = {
 	.rxmode = {
-        .max_rx_pkt_len = ETHER_MAX_LEN,
+        .max_rx_pkt_len = RTE_ETHER_MAX_LEN,
 		.split_hdr_size = 0,
-		.header_split   = 0, /**< Header Split disabled */
-		.hw_ip_checksum = 0, /**< IP checksum offload disabled */
-		.hw_vlan_filter = 0, /**< VLAN filtering disabled */
-		.jumbo_frame    = 0, /**< Jumbo Frame Support disabled */
-		.hw_strip_crc   = 0, /**< CRC stripped by hardware */
+		//.header_split   = 0, /**< Header Split disabled */
+		//.hw_ip_checksum = 0, /**< IP checksum offload disabled */
+		//.hw_vlan_filter = 0, /**< VLAN filtering disabled */
+		//.jumbo_frame    = 0, /**< Jumbo Frame Support disabled */
+		//.hw_strip_crc   = 0, /**< CRC stripped by hardware */
 		.mq_mode = ETH_MQ_RX_NONE,
 	},
 	.txmode = {
 		.mq_mode = ETH_MQ_TX_NONE,
 	},
+	/*
 	.fdir_conf = {
 		//.mode =             RTE_FDIR_MODE_NONE,
 		.mode =             RTE_FDIR_MODE_PERFECT,
@@ -75,6 +77,8 @@ static const struct rte_eth_conf mehcached_port_conf = {
 		.flexbytes_offset = 0,
 		.drop_queue =       0,
 	},
+	*don't use fdir
+	*/
 };
 
 static const struct rte_eth_rxconf mehcached_rx_conf = {
@@ -95,11 +99,14 @@ static const struct rte_eth_txconf mehcached_tx_conf = {
 	},
 	.tx_free_thresh = 0, /* Use PMD default values */
 	.tx_rs_thresh = 0, /* Use PMD default values */
+/*
 #ifndef MEHCACHED_USE_SOFT_FDIR
     .txq_flags = (ETH_TXQ_FLAGS_NOMULTSEGS | ETH_TXQ_FLAGS_NOREFCOUNT | ETH_TXQ_FLAGS_NOMULTMEMP | ETH_TXQ_FLAGS_NOOFFLOADS),
 #else
     .txq_flags = (ETH_TXQ_FLAGS_NOMULTSEGS | ETH_TXQ_FLAGS_NOREFCOUNT | ETH_TXQ_FLAGS_NOOFFLOADS),
 #endif
+* dont use fdir
+*/
 };
 
 
@@ -131,10 +138,10 @@ struct mehcached_queue_state {
 
 static struct rte_mempool *mehcached_pktmbuf_pool[MEHCACHED_MAX_NUMA_NODES];
 
-//static uint16_t mehcached_lcore_to_queue[MEHCACHED_MAX_LCORES];
-//static struct ether_addr mehcached_eth_addr[MEHCACHED_MAX_PORTS];
+//static uint16_t mehcached_lcore_to_queue[NUM_CORE];
+//static struct ether_addr mehcached_eth_addr[NUM_PORT];
 
-static struct mehcached_queue_state *mehcached_queue_states[MEHCACHED_MAX_QUEUES * MEHCACHED_MAX_PORTS];
+static struct mehcached_queue_state *mehcached_queue_states[NUM_QUEUE * NUM_PORT];
 
 struct rte_mbuf *
 mehcached_packet_alloc()
@@ -155,7 +162,7 @@ mehcached_receive_packet(uint8_t port_id)
 	// uint16_t queue = mehcached_lcore_to_queue[lcore];
 	// assert(queue != (uint16_t)-1);
 	uint16_t queue = (uint16_t)lcore;
-	struct mehcached_queue_state *state = mehcached_queue_states[queue * MEHCACHED_MAX_PORTS + port_id];
+	struct mehcached_queue_state *state = mehcached_queue_states[queue * NUM_PORT + port_id];
 
 	if (state->rx_next_to_use == state->rx_length)
 	{
@@ -253,7 +260,7 @@ mehcached_receive_packets(uint8_t port_id, struct rte_mbuf **mbufs, size_t *in_o
 	// uint16_t queue = mehcached_lcore_to_queue[lcore];
 	// assert(queue != (uint16_t)-1);
 	uint16_t queue = (uint16_t)lcore;
-	struct mehcached_queue_state *state = mehcached_queue_states[queue * MEHCACHED_MAX_PORTS + port_id];
+	struct mehcached_queue_state *state = mehcached_queue_states[queue * NUM_PORT + port_id];
 
 	*in_out_num_mbufs = (size_t)rte_eth_rx_burst(port_id, queue, mbufs, (uint16_t)*in_out_num_mbufs);
 	state->num_rx_received += *in_out_num_mbufs;
@@ -267,7 +274,7 @@ mehcached_send_packet(uint8_t port_id, struct rte_mbuf *mbuf)
 	// uint16_t queue = mehcached_lcore_to_queue[lcore];
 	// assert(queue != (uint16_t)-1);
 	uint16_t queue = (uint16_t)lcore;
-	struct mehcached_queue_state *state = mehcached_queue_states[queue * MEHCACHED_MAX_PORTS + port_id];
+	struct mehcached_queue_state *state = mehcached_queue_states[queue * NUM_PORT + port_id];
 
 #ifndef NDEBUG
     //printf("mehcached_send_packet: lcore=%zu, port=%zu, queue=%zu\n", lcore, port, queue);
@@ -293,7 +300,7 @@ mehcached_send_packet_flush(uint8_t port_id)
 	// uint16_t queue = mehcached_lcore_to_queue[lcore];
 	// assert(queue != (uint16_t)-1);
 	uint16_t queue = (uint16_t)lcore;
-	struct mehcached_queue_state *state = mehcached_queue_states[queue * MEHCACHED_MAX_PORTS + port_id];
+	struct mehcached_queue_state *state = mehcached_queue_states[queue * NUM_PORT + port_id];
 
 	if (state->tx_length > 0)
 	{
@@ -319,7 +326,7 @@ mehcached_get_stats_lcore(uint8_t port_id, uint32_t lcore, uint64_t *out_num_rx_
 	// uint16_t queue = mehcached_lcore_to_queue[lcore];
 	// assert(queue != (uint16_t)-1);
 	uint16_t queue = (uint16_t)lcore;
-	struct mehcached_queue_state *state = mehcached_queue_states[queue * MEHCACHED_MAX_PORTS + port_id];
+	struct mehcached_queue_state *state = mehcached_queue_states[queue * NUM_PORT + port_id];
 
 	if (out_num_rx_burst)
 		*out_num_rx_burst = state->num_rx_burst;
@@ -352,7 +359,7 @@ mehcached_init_network(uint64_t cpu_mask, uint64_t port_mask, uint8_t *out_num_p
 	size_t num_numa_nodes = 0;
 	uint16_t num_queues = 0;
 
-	assert(rte_lcore_count() <= MEHCACHED_MAX_LCORES);
+	assert(rte_lcore_count() <= NUM_CORE);
 
 	// count required queues
 	for (i = 0; i < rte_lcore_count(); i++)
@@ -360,7 +367,8 @@ mehcached_init_network(uint64_t cpu_mask, uint64_t port_mask, uint8_t *out_num_p
 		if ((cpu_mask & ((uint64_t)1 << i)) != 0)
 			num_queues++;
 	}
-	assert(num_numa_nodes <= MEHCACHED_MAX_QUEUES);
+	printf("[QUEUE] number of queue: %u\n",num_queues);
+	assert(num_numa_nodes <= NUM_QUEUE);
 
 	// count numa nodes
 	for (i = 0; i < rte_lcore_count(); i++)
@@ -379,8 +387,10 @@ mehcached_init_network(uint64_t cpu_mask, uint64_t port_mask, uint8_t *out_num_p
 		snprintf(pool_name, sizeof(pool_name), "pktmbuf_pool%zu", i);
 		// if this is not big enough, RX/TX performance may not be consistent, e.g., between CREW and CRCW experiments
 		// the maximum cache size can be adjusted in DPDK's .config file: CONFIG_RTE_MEMPOOL_CACHE_MAX_SIZE
-		const unsigned int cache_size = MEHCACHED_MAX_PORTS * 1024;
-		mehcached_pktmbuf_pool[i] = rte_mempool_create(pool_name, MEHCACHED_MBUF_SIZE, MEHCACHED_MBUF_ENTRY_SIZE, cache_size, sizeof(struct rte_pktmbuf_pool_private), rte_pktmbuf_pool_init, NULL, rte_pktmbuf_init, NULL, (int)i, 0);
+		const unsigned int cache_size = NUM_PORT * 512;
+		//mehcached_pktmbuf_pool[i] = rte_mempool_create(pool_name, MEHCACHED_MBUF_SIZE, MEHCACHED_MBUF_ENTRY_SIZE, cache_size, sizeof(struct rte_pktmbuf_pool_private), rte_pktmbuf_pool_init, NULL, rte_pktmbuf_init, NULL, (int)i, 0);
+		mehcached_pktmbuf_pool[i] = rte_pktmbuf_pool_create(pool_name, 4096*2, 0, 0, 1500+sizeof(struct rte_mbuf)+RTE_PKTMBUF_HEADROOM, SOCKET_ID_ANY);
+		printf("[DEBUG] memory pool pointer %p \n", mehcached_pktmbuf_pool[i]);
 		if (mehcached_pktmbuf_pool[i] == NULL)
 		{
 			fprintf(stderr, "failed to allocate mbuf for numa node %zu\n", i);
@@ -388,29 +398,17 @@ mehcached_init_network(uint64_t cpu_mask, uint64_t port_mask, uint8_t *out_num_p
 		}
 	}
 
-	// initialize driver
-#ifdef RTE_LIBRTE_IXGBE_PMD
-	printf("initializing PMD\n");
-	if (rte_ixgbe_pmd_init() < 0)
-	{
-		fprintf(stderr, "failed to initialize ixgbe pmd\n");
-		return false;
-	}
-#endif
-
-	printf("probing PCI\n");
-	if (rte_eal_pci_probe() < 0)
-	{
-		fprintf(stderr, "failed to probe PCI\n");
-		return false;
-	}
 
 	// TODO: initialize and set up timer for forced TX
 
 	// check port and queue limits
-	uint8_t num_ports = rte_eth_dev_count();
-	assert(num_ports <= MEHCACHED_MAX_PORTS);
+	uint8_t num_ports = rte_eth_dev_count_avail();
+	assert(num_ports <= NUM_PORT);
 	*out_num_ports = num_ports;
+	unsigned int num_cores = rte_lcore_count();
+
+	printf("[QUEUE] Number of DPDK ports: %u\n", num_ports);
+	printf("[QUEUE] Number of available lcores: %u\n", num_cores);
 
 	printf("checking queue limits\n");
 	uint8_t port_id;
@@ -450,6 +448,11 @@ mehcached_init_network(uint64_t cpu_mask, uint64_t port_mask, uint8_t *out_num_p
 	// initialize ports
 	for (port_id = 0; port_id < num_ports; port_id++)
 	{
+		struct rte_eth_dev_info dev_info;
+		rte_eth_dev_info_get(port_id, &dev_info);
+
+		printf("[QUEUE] Port %d supports max_rx_queues=%u, max_tx_queues=%u\n",
+				       port_id, dev_info.max_rx_queues, dev_info.max_tx_queues);
 		if ((port_mask & ((uint64_t)1 << port_id)) == 0)
 			continue;
 
@@ -468,6 +471,9 @@ mehcached_init_network(uint64_t cpu_mask, uint64_t port_mask, uint8_t *out_num_p
 		uint32_t lcore;
 		for (lcore = 0; lcore < rte_lcore_count(); lcore++)
 		{
+			// [DEBUGGING] using only enabled core
+			if (!rte_lcore_is_enabled(lcore))
+				continue;
 			// uint16_t queue = mehcached_lcore_to_queue[lcore];
 			// if (queue == (uint16_t)-1)
 			// 	continue;
@@ -531,8 +537,8 @@ mehcached_init_network(uint64_t cpu_mask, uint64_t port_mask, uint8_t *out_num_p
 		for (lcore = 0; lcore < rte_lcore_count(); lcore++)
 		{
 			uint16_t queue = (uint16_t)lcore;
-			mehcached_queue_states[queue * MEHCACHED_MAX_PORTS + port_id] = mehcached_eal_malloc_lcore(sizeof(struct mehcached_queue_state), lcore);
-			memset(mehcached_queue_states[queue * MEHCACHED_MAX_PORTS + port_id], 0, sizeof(struct mehcached_queue_state));
+			mehcached_queue_states[queue * NUM_PORT + port_id] = mehcached_eal_malloc_lcore(sizeof(struct mehcached_queue_state), lcore);
+			memset(mehcached_queue_states[queue * NUM_PORT + port_id], 0, sizeof(struct mehcached_queue_state));
 		}
 
 	return true;
@@ -542,7 +548,7 @@ void
 mehcached_free_network(uint64_t port_mask)
 {
 	uint8_t port_id;
-	uint8_t num_ports = rte_eth_dev_count();
+	uint8_t num_ports = rte_eth_dev_count_avail();
 	
 	for (port_id = 0; port_id < num_ports; port_id++)
 	{
@@ -563,6 +569,7 @@ mehcached_free_network(uint64_t port_mask)
 	}
 }
 
+/*
 bool
 mehcached_set_dst_port_mask(uint8_t port_id, uint16_t l4_dst_port_mask)
 {
@@ -607,3 +614,4 @@ mehcached_set_dst_port_mapping(uint8_t port_id, uint16_t l4_dst_port, uint32_t l
 
 	return true;
 }
+*/

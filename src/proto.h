@@ -40,7 +40,7 @@
 struct mehcached_batch_packet
 {
 	// 0
-	uint8_t header[sizeof(struct ether_hdr) + sizeof(struct ipv4_hdr) + sizeof(struct udp_hdr)];
+	uint8_t header[sizeof(struct rte_ether_hdr) + sizeof(struct rte_ipv4_hdr) + sizeof(struct rte_udp_hdr)];
 	// 42
 	uint8_t num_requests;
 	uint8_t reserved0;

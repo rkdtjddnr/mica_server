@@ -87,6 +87,7 @@ static uint64_t mul_hash(const uint8_t *key, size_t len)
 }
 
 // MD4 truncated to 12 B
+/*
 #include <openssl/md4.h>
 static uint64_t hash_md4(const uint8_t *key, size_t len)
 {
@@ -95,6 +96,7 @@ static uint64_t hash_md4(const uint8_t *key, size_t len)
     assert(8 <= MD4_DIGEST_LENGTH);
     return *(size_t *)temp_hash;
 }
+*/
 
 static uint64_t hash(const uint8_t *key, size_t len)
 {

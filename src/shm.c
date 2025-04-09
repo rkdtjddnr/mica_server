@@ -69,7 +69,7 @@ static struct mehcached_shm_entry mehcached_shm_entries[MEHCACHED_SHM_MAX_ENTRIE
 static struct mehcached_shm_mapping mehcached_shm_mappings[MEHCACHED_SHM_MAX_MAPPINGS];
 static size_t mehcached_shm_used_memory;
 
-static const char *mehcached_shm_path_prefix = "/mnt/huge/mehcached_shm_";
+static const char *mehcached_shm_path_prefix = "/dev/hugepages/mehcached_shm_";
 
 size_t
 mehcached_shm_adjust_size(size_t size)

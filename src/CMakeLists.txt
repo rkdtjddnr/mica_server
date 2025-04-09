@@ -61,14 +61,15 @@ set(LIBRARIES ${LIBRARIES} rt crypto perf_count m pthread)
 #set(LIBRARIES ${LIBRARIES} tcmalloc_minimal)
 
 # DPDK
-set(RTE_SDK ${CMAKE_CURRENT_SOURCE_DIR}/../../DPDK)
+set(RTE_SDK /home/ubuntu/app_server/gem5-dpdk-setup/dpdk-pktgen-build/dpdk)
 set(RTE_TARGET x86_64-default-linuxapp-gcc)
 add_definitions(-DUSE_DPDK)
-add_definitions(-isystem ${RTE_SDK}/${RTE_TARGET}/include -include rte_config.h)
-link_directories(${LINK_DIRECTORIES} ${RTE_SDK}/${RTE_TARGET}/lib)
-set(LIBRARIES ${LIBRARIES} rte_eal rte_malloc rte_mempool rte_ring)	# for basic features
-set(LIBRARIES ${LIBRARIES} ethdev rte_mbuf rte_pmd_ixgbe librte_pmd_ring.a)	# for network features
-set(LIBRARIES ${LIBRARIES} pthread rt)	# to make sure symbols in pthread and rt are resolved
+add_definitions(-isystem ${RTE_SDK}/build/include -include rte_config.h)
+link_directories(${LINK_DIRECTORIES} ${RTE_SDK}/build/lib)
+set(LIBRARIES ${LIBRARIES} -Wl,--whole-archive)
+set(LIBRARIES ${LIBRARIES} rte_kvargs rte_mbuf rte_ethdev rte_mempool rte_ring rte_eal)
+set(LIBRARIES ${LIBRARIES} -Wl,--no-whole-archive)
+set(LIBRARIES ${LIBRARIES} rt dl)
 
 if(NOT "${NLOCAL}" STREQUAL "yes")
 	# test
@@ -121,8 +122,13 @@ if(NOT "${NSERVER}" STREQUAL "yes")
 
 	# netbench_server_soft_fdir
 	add_executable(netbench_server_soft_fdir net_common.c netbench_config.c netbench_server.c ${SOURCES})
-	set_target_properties(netbench_server_soft_fdir PROPERTIES COMPILE_FLAGS "-DMEHCACHED_USE_SOFT_FDIR")
+	set_target_properties(netbench_server_soft_fdir PROPERTIES COMPILE_FLAGS "-DMEHCACHED_USE_SOFT_FDIR -O0 -g")
 	target_link_libraries(netbench_server_soft_fdir ${LIBRARIES})
+
+	# for packet capture
+	add_executable(netbench_server_soft_fdir_pcap net_common.c netbench_config.c netbench_server.c /home/ubuntu/app_server/pcap_file/src/mica_pcap.c ${SOURCES})
+	set_target_properties(netbench_server_soft_fdir_pcap PROPERTIES COMPILE_FLAGS "-DMEHCACHED_USE_SOFT_FDIR -DMICA_PCAP -O0 -g")
+	target_link_libraries(netbench_server_soft_fdir_pcap ${LIBRARIES})
 
 	# netbench_server_store
 	add_executable(netbench_server_store net_common.c netbench_config.c netbench_server.c ${SOURCES})

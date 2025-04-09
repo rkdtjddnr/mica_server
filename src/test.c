@@ -15,6 +15,8 @@
 #include <stdio.h>
 #include <assert.h>
 
+//#include <stdbool.h>
+
 #include "mehcached.h"
 #include "hash.h"
 

@@ -23,6 +23,6 @@ add_subdirectory(src)
 add_custom_target(
     symbolic_links
     ALL
-    ln -sf src/test src/load src/microbench src/microbench_store src/netbench_client src/netbench_server src/netbench_client_latency src/netbench_client_soft_fdir src/netbench_server_latency src/netbench_server_soft_fdir src/netbench_server_store src/netbench_analysis .
+    ln -sf src/test src/load src/microbench src/microbench_store src/netbench_client src/netbench_server src/netbench_client_latency src/netbench_client_soft_fdir src/netbench_server_latency src/netbench_server_soft_fdir src/netbench_server_soft_fdir_pcap src/netbench_server_store src/netbench_analysis .
 )
 
