@@ -22,7 +22,7 @@ struct pcap_sf_pkthdr {
 #pragma pack()
 
 
-// GLOBAL HEADER => 파일 생성 시 한 번만 써줌
+// GLOBAL HEADER
 struct pcap_file_header {
 	bpf_u_int32 magic;
 	u_short version_major;
