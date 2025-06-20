@@ -19,6 +19,8 @@
 #include <assert.h>
 #include <signal.h>
 
+#include <fcntl.h>
+
 #include "mehcached.h"
 #include "hash.h"
 #include "net_common.h"
@@ -36,6 +38,8 @@
 #include <rte_log.h>
 #include <rte_malloc.h>
 #include <rte_debug.h>
+//#include <gem5/m5ops.h>
+
 
 #if !defined(NETBENCH_SERVER_MEMCACHED) && !defined(NETBENCH_SERVER_MASSTREE) && !defined(NETBENCH_SERVER_RAMCLOUD)
 #define NETBENCH_SERVER_MEHCACHED
@@ -56,6 +60,12 @@
 // For pcap file
 #include "../../pcap_file/src/mica_pcap.h"
 #endif
+
+// for logging
+#define RXMBUF_ADDR 0
+#define REQ_DEBUG 0
+
+#define TIME_DIFF_POLL 0
 
 //#define USE_HOT_ITEMS
 
@@ -267,21 +277,21 @@ mehcached_benchmark_server_proc(void *arg)
     struct server_state **states = (struct server_state **)arg;
 
     uint8_t thread_id = (uint8_t)rte_lcore_id();
-    printf("[SERVER] thread id = %u\n", thread_id);
+    //printf("[SERVER] thread id = %u\n", thread_id);
     struct server_state *state = states[thread_id];
     if (state->server_conf == NULL) {
-	fprintf(stderr, "[ERROR] server_conf is NULL in state[%u]\n", thread_id);
+	printf("[ERROR] server_conf is NULL in state[%u]\n", thread_id);
 	abort();
     }
 
     struct mehcached_server_conf *server_conf = state->server_conf;
     if (server_conf->threads == NULL) {
-	fprintf(stderr, "[ERROR] server_conf->threads is NULL\n");
+	printf("[ERROR] server_conf->threads is NULL\n");
 	abort();
     }
 
     struct mehcached_server_thread_conf *thread_conf = &server_conf->threads[thread_id];
-    fprintf(stderr, "[DEBUG] thread_conf accessed successfully for thread_id %u\n", thread_id);
+    //printf("[DEBUG] thread_conf accessed successfully for thread_id %u\n", thread_id);
 
 #ifdef USE_HOT_ITEMS
     mehcached_calc_hot_item_hash(state->server_conf, &state->hot_item_hash);
@@ -319,40 +329,41 @@ mehcached_benchmark_server_proc(void *arg)
     uint64_t last_ierrors[NUM_PORT];
     uint64_t last_opackets[NUM_PORT];
     uint64_t last_oerrors[NUM_PORT];
-
+    /*
     if (thread_id == 0)
-{
-    fprintf(stderr, "[DEBUG] server thread 0 starting stats init...\n");
-    uint8_t port_id;
-    for (port_id = 0; port_id < server_conf->num_ports; port_id++)
     {
-        fprintf(stderr, "[DEBUG] port_id: %u\n", port_id);
-        struct rte_eth_stats stats;
-        int ret = rte_eth_stats_get(port_id, &stats);
-        if (ret < 0)
-            fprintf(stderr, "[DEBUG] rte_eth_stats_get failed for port %u\n", port_id);
-        else
-            fprintf(stderr, "[DEBUG] ipackets = %lu\n", stats.ipackets);
-
-        last_ipackets[port_id] = stats.ipackets;
-        last_ierrors[port_id] = stats.ierrors;
-
-        uint64_t opackets = 0;
-        uint64_t oerrors = 0;
-        uint8_t i;
-        for (i = 0; i < server_conf->num_threads; i++)
+        fprintf(stderr, "[DEBUG] server thread 0 starting stats init...\n");
+        uint8_t port_id;
+        for (port_id = 0; port_id < server_conf->num_ports; port_id++)
         {
-            fprintf(stderr, "[DEBUG] calling mehcached_get_stats_lcore(%u, %u)\n", port_id, i);
-            uint64_t num_tx_sent;
-            uint64_t num_tx_dropped;
-            mehcached_get_stats_lcore(port_id, i, NULL, NULL, NULL, &num_tx_sent, &num_tx_dropped);
-            opackets += num_tx_sent;
-            oerrors += num_tx_dropped;
+            fprintf(stderr, "[DEBUG] port_id: %u\n", port_id);
+            struct rte_eth_stats stats;
+            int ret = rte_eth_stats_get(port_id, &stats);
+            if (ret < 0)
+                fprintf(stderr, "[DEBUG] rte_eth_stats_get failed for port %u\n", port_id);
+            else
+                fprintf(stderr, "[DEBUG] ipackets = %lu\n", stats.ipackets);
+
+            last_ipackets[port_id] = stats.ipackets;
+            last_ierrors[port_id] = stats.ierrors;
+
+            uint64_t opackets = 0;
+            uint64_t oerrors = 0;
+            uint8_t i;
+            for (i = 0; i < server_conf->num_threads; i++)
+            {
+                fprintf(stderr, "[DEBUG] calling mehcached_get_stats_lcore(%u, %u)\n", port_id, i);
+                uint64_t num_tx_sent;
+                uint64_t num_tx_dropped;
+                mehcached_get_stats_lcore(port_id, i, NULL, NULL, NULL, &num_tx_sent, &num_tx_dropped);
+                opackets += num_tx_sent;
+                oerrors += num_tx_dropped;
+            }
+            last_opackets[port_id] = opackets;
+            last_oerrors[port_id] = oerrors;
         }
-        last_opackets[port_id] = opackets;
-        last_oerrors[port_id] = oerrors;
     }
-}    
+    */    
 
 #ifdef MICA_PCAP
     FILE* my_pcap_file;
@@ -376,8 +387,8 @@ mehcached_benchmark_server_proc(void *arg)
 #endif
 
 
-    const size_t pipeline_size = 32;
-    const size_t max_pending_packets = 32;
+    const size_t pipeline_size = MEHCACHED_MAX_PKT_BURST;
+    const size_t max_pending_packets = MEHCACHED_MAX_PKT_BURST;
 
 #define USE_STAGE_GAP
 
@@ -390,6 +401,18 @@ mehcached_benchmark_server_proc(void *arg)
 #endif
 
     size_t next_port_index = 0;
+
+    printf("DPDK-version of mica is ready to accept requests!\n");
+    printf("DPDK-version of mica burst size is %d \n", MEHCACHED_MAX_PKT_BURST);
+
+    #if REQ_DEBUG == 1
+    uint32_t counter_d = 0;
+    uint32_t get_s = 0;
+    uint32_t get_f = 0;
+    uint32_t set_s = 0;
+    uint32_t set_f = 0;
+    uint32_t acc_p = 0;
+    #endif
 
     while (!exiting)
     {
@@ -438,15 +461,26 @@ mehcached_benchmark_server_proc(void *arg)
         // receive packets
         // the minimum retrieval interval of 1 us avoids excessive PCIe use, which causes slowdowns in skewed workloads
         // (most cores cause small batches, which reduces available bandwidth for the loaded cores)
+        
 
+        #if TIME_DIFF_POLL == 1
         if (t_end - t_last_rx[next_port_index] >= 1 * mehcached_stopwatch_1_usec)
         {
             packet_count = pipeline_size;
             mehcached_receive_packets(port_id, packet_mbufs, &packet_count);
             t_last_rx[next_port_index] = t_end;
         }
-        else
-            packet_count = 0;
+        #else
+        packet_count = pipeline_size;
+        mehcached_receive_packets(port_id, packet_mbufs, &packet_count);
+        if(packet_count == 0) continue;
+        //printf("DPDK-Version of MICA Server received %d Packets in a single Bursts!\n", (int)packet_count);
+        #endif
+
+        #if REQ_DEBUG == 1
+        acc_p += packet_count;
+        #endif
+        
 
 #ifdef MICA_PCAP
         // packet capture for RX packet
@@ -530,6 +564,10 @@ mehcached_benchmark_server_proc(void *arg)
 #endif
             {
                 struct rte_mbuf *mbuf = packet_mbufs[stage0_index];
+                #if RXMBUF_ADDR == 1
+                printf("[MICA] ------ %d ------ \n", stage3_index);
+                printf("[MICA] rx mbuf physical addr 0x%lx \n", rte_mbuf_data_iova_default(mbuf));
+                #endif
                 struct mehcached_batch_packet *packet = packets[stage0_index] = rte_pktmbuf_mtod(mbuf, struct mehcached_batch_packet *);
                 __builtin_prefetch(packet, 0, 0);
                 __builtin_prefetch(&packet->data, 0, 0);
@@ -550,7 +588,7 @@ mehcached_benchmark_server_proc(void *arg)
                 uint8_t request_index;
                 for (request_index = 0; request_index < packet->num_requests; request_index++)
                 {
-                    struct mehcached_request *req = (struct mehcached_request *)packet->data + request_index;
+                    struct mehcached_request *req = (struct mehcached_request *)packet->data + request_index; // -> packet->data + 16B x request_index offset
                     if (req->operation != MEHCACHED_NOOP_READ && req->operation != MEHCACHED_NOOP_WRITE)
                     {
                         uint64_t key_hash = req->key_hash;
@@ -608,6 +646,15 @@ mehcached_benchmark_server_proc(void *arg)
 #endif
             {
                 struct rte_mbuf *mbuf = packet_mbufs[stage3_index];
+                #if RXMBUF_ADDR == 1
+                // log for first mbuf in every loop
+                if (1)// (stage3_index == 0)
+                {
+                    printf("[MICA] ------ %d ------ \n", stage3_index);
+                    printf("[MICA] rx mbuf physical addr 0x%lx \n", rte_mbuf_data_iova_default(mbuf));
+                }
+                
+                #endif
                 struct mehcached_batch_packet *packet = packets[stage3_index];
 #ifdef NETBENCH_SERVER_MEHCACHED
 #ifdef USE_HOT_ITEMS
@@ -709,9 +756,19 @@ mehcached_benchmark_server_proc(void *arg)
 #ifdef NETBENCH_SERVER_RAMCLOUD
                                 if (ramcloud_put(state->ramcloud, thread_id, (const char *)key, key_length, (const char *)value, value_length))
 #endif
+                                {
                                     req->result = MEHCACHED_OK;
+                                    #if REQ_DEBUG == 1
+                                    set_s++;
+                                    #endif
+                                }
                                 else
+                                {
                                     req->result = MEHCACHED_ERROR;
+                                    #if REQ_DEBUG == 1
+                                    set_f++;
+                                    #endif
+                                }
                                 req->kv_length_vec = 0;
                             }
                             break;
@@ -733,6 +790,12 @@ mehcached_benchmark_server_proc(void *arg)
 #endif
                                 {
                                     req->result = MEHCACHED_OK;
+                                    #if REQ_DEBUG == 1
+                                    uint64_t v = *(uint64_t *)out_value;
+                                    printf("[GET] Req success\n");
+                                    printf("value 0x%lx\n", v);
+                                    get_s++;
+                                    #endif
 
                                     if (0)
                                     {
@@ -753,6 +816,9 @@ mehcached_benchmark_server_proc(void *arg)
                                 {
                                     req->result = MEHCACHED_ERROR;  // TODO: return a correct failure code
                                     out_value_length = 0;
+                                    #if REQ_DEBUG == 1
+                                    get_f++;
+                                    #endif
                                 }
                                 req->kv_length_vec = MEHCACHED_KV_LENGTH_VEC(0, out_value_length);
 #ifndef NETBENCH_SERVER_MEHCACHED
@@ -821,12 +887,30 @@ mehcached_benchmark_server_proc(void *arg)
 
 
                 stage3_index++;
+                #if REQ_DEBUG == 1
+                counter_d++;
+                #endif
             }
 #ifndef USE_STAGE_GAP
             else
                 t = (uint32_t)mehcached_stopwatch_now();
 #endif
+        
+
         }
+        #if REQ_DEBUG == 1
+        if((counter_d > 0) && (counter_d % 512 == 0))
+        {
+            printf("------acc statistics------\n");
+            printf("Acc packet %u\n", acc_p);
+            printf("GET success %u\n", get_s);
+            printf("GET failed %u\n", get_f);
+            printf("SET success %u\n", set_s);
+            printf("SET failed %u\n", set_f);
+            fflush(stdout);
+        }
+        
+        #endif
 
         t_end = mehcached_stopwatch_now();
 
@@ -847,6 +931,7 @@ mehcached_benchmark_server_proc(void *arg)
                 next_port_index = 0;
         }
 
+        /*
         i++;
 
         if ((i & 0xff) == 0)
@@ -1157,11 +1242,16 @@ mehcached_benchmark_server_proc(void *arg)
 
                 prev_rate_update = diff;
             }
+            
         }
+        */
     }
 
     return 0;
 }
+
+
+
 
 struct mehcached_diagnosis_arg
 {
@@ -1294,87 +1384,138 @@ mehcached_benchmark_prepopulate_proc(void *arg)
     unsigned int node_id = rte_lcore_to_socket_id(thread_id);
 
     printf("prepopulation: num_items %lu key_length %zu value_length %zu on core %hhu\n", prepopulation_conf->num_items, prepopulation_conf->key_length, prepopulation_conf->value_length, thread_id);
-    fflush(stdout);
+    
+    //printf("[DEBUG] state pointer address: %p\n", (void*)state);
+    //printf("[DEBUG] server_conf pointer address: %p\n", (void*)server_conf);
+    //printf("[DEBUG] prepopulation_conf pointer address: %p\n", (void*)prepopulation_conf);
+
 
     if (prepopulation_conf->num_items == 0)
         return 0;
 
-    uint64_t t_start = mehcached_stopwatch_now();
-    uint64_t t_last_report = t_start;
+    // uint64_t t_start = mehcached_stopwatch_now();
+    // uint64_t t_last_report = t_start;
+
 
     uint64_t key[MEHCACHED_ROUNDUP8(prepopulation_conf->key_length) / 8 + 1];
     uint64_t value[MEHCACHED_ROUNDUP8(prepopulation_conf->value_length) / 8 + 1];
+
     memset(key, 0, sizeof(key));
     memset(value, 0, sizeof(value));
+    
+    // printf("[DEBUG] Address of key right after declaration : %p\n", (void *)key);
+    // printf("[DEBUG] key[0] : %lu\n", key[0]);
+    // printf("[DEBUG] key[1] : %lu\n", key[1]);
+    // printf("[DEBUG] key array size: %zu\n", sizeof(key));
+    // printf("[DEBUG] key[0] size: %zu\n", sizeof(key[0]));
+    // printf("[DEBUG] value array size: %zu\n", sizeof(value));
 
     size_t log16_num_items = 0;
     while (((size_t)1 << (log16_num_items * 4)) < (prepopulation_conf->num_items + 1))
         log16_num_items++;
+    //printf("[DEBUG] log16_num_items: %zu\n", log16_num_items);
+    
     size_t key_position_step = prepopulation_conf->key_length / log16_num_items;
     if (key_position_step == 0)
         key_position_step = 1;
-    // printf("%lu %lu %lu\n", key_position_step, log16_num_items, prepopulation_conf->key_length);
+    //printf("[DEBUG] key_pos_step: %lu\n", key_position_step);
     assert(key_position_step * log16_num_items <= prepopulation_conf->key_length);
 
     uint64_t key_index;
     uint64_t key_index_last_report = 0;
     for (key_index = 0; key_index < prepopulation_conf->num_items; key_index++)
     {
+        /*
         if ((key_index & 0xff) == 0)
         {
             uint64_t t_end = mehcached_stopwatch_now();
             if (t_end - t_last_report >= mehcached_stopwatch_1_sec)
             {
-                double tput = (double)(key_index - key_index_last_report) / mehcached_stopwatch_diff_in_s(t_end, t_last_report);
-                printf("prepopulation: %3.2lf%% @ %2.2lf M items/sec\n", 100. * (double)key_index / (double)prepopulation_conf->num_items, tput / 1000000.);
+                // double tput = (double)(key_index - key_index_last_report) / mehcached_stopwatch_diff_in_s(t_end, t_last_report);
+                // printf("prepopulation: %3.2lf%% @ %2.2lf M items/sec\n", 100. * (double)key_index / (double)prepopulation_conf->num_items, tput / 1000000.);
                 fflush(stdout);
                 key_index_last_report = key_index;
                 t_last_report += mehcached_stopwatch_1_sec;
             }
         }
+        */
 
         uint64_t key_hash = mehcached_hash_key(key_index);
         uint16_t partition_id = mehcached_get_partition_id(state, key_hash);
         uint8_t owner_thread_id = server_conf->partitions[partition_id].thread_id;
+        //printf("[DEBUG] Address of key: %p\n", (void *)key);
+
+        //printf("[DEBUG] key_index: %llu, key_hash: %llu, partition_id: %u, owner_thread_id: %u\n",
+        //        key_index, key_hash, partition_id, owner_thread_id);
+
 
         // if (owner_thread_id != thread_id)
         //     continue;
-        if (rte_lcore_to_socket_id(owner_thread_id) != node_id)
-            continue;
+        // if (rte_lcore_to_socket_id(owner_thread_id) != node_id)
+        //    continue;
 
         // from netbench_client.c
 
         // variable-length hexadecimal key
-        size_t key_length = 0;
-        {
-            size_t i;
-            for (i = 0; i < sizeof(key) / sizeof(key[0]); i++)
-                key[i] = 0;     // for keys that need zero paddings to an 8-byte boundary
-            uint64_t key_index_copy = key_index + 1;
-            while (key_index_copy > 0)
-            {
-                key_index_copy >>= 4;
-                key_length += key_position_step;
-            }
-            key_index_copy = key_index + 1;
-            size_t char_index = key_length;
-            while (key_index_copy > 0)
-            {
-                char_index -= key_position_step;
-                ((char *)key)[char_index] = (char)(key_index_copy & 15);
-                key_index_copy >>= 4;
-            }
-        }
+        // variable-length hexadecimal key
+size_t key_length = 0;
+{
+    // Why using this loop?? Upper using memset(key, 0, sizeof(key))
+    size_t i;
+    for (i = 0; i < sizeof(key) / sizeof(key[0]); i++) {
+        key[i] = 0;  // for keys that need zero paddings to an 8-byte boundary
+    }
 
-        *(uint64_t *)value = (key_index & 0xffffffff) | ((~key_index & 0xffffffff) << 32);
+    // printf("[DEBUG] Address of key: %p\n", (void *)key);
+    // printf("[DEBUG] key[0] : %lu\n", key[0]);
+    // printf("[DEBUG] key[1] : %lu\n", key[1]);
+
+    uint64_t key_index_copy = key_index + 1;
+    // Debugging: Print initial key_index_copy value
+    //printf("[DEBUG] Initial key_index_copy: %llu\n", key_index_copy);
+
+    while (key_index_copy > 0) {
+        key_index_copy >>= 4;
+        key_length += key_position_step;
+    }
+    
+    // Debugging: Print key_length after first loop
+    //printf("[DEBUG] Calculated key_length: %zu\n", key_length);
+
+    key_index_copy = key_index + 1;
+    size_t char_index = key_length;
+    while (key_index_copy > 0) {
+        char_index -= key_position_step;
+        ((char *)key)[char_index] = (char)(key_index_copy & 15);
+        
+        // Debugging: Print the intermediate values of key_index_copy and char_index
+        //printf("[DEBUG] key_index_copy: %llu, char_index: %zu, key[char_index]: %d\n", key_index_copy, char_index, key[char_index]);
+
+        key_index_copy >>= 4;
+    }
+}
+
+// Debugging: Print the final key array
+//printf("[DEBUG] Final key: ");
+// for (size_t i = 0; i < key_length; i++) {
+//     printf("%02x ", key[i]);
+// }
+// printf("\n");
+
+// Debugging: Print the final value
+*(uint64_t *)value = (key_index & 0xffffffff) | ((~key_index & 0xffffffff) << 32);
+//printf("[DEBUG] Final value: 0x%llx\n", *(uint64_t *)value);
 
 #ifdef NETBENCH_SERVER_MEHCACHED
         struct mehcached_table *partition = state->partitions[partition_id];
+        //printf("[DEBUG] partition pointer address: %p\n", (void*)partition);
         uint8_t alloc_id;
         if (partition_id < server_conf->num_partitions)
             alloc_id = (uint8_t)((MEHCACHED_CONCURRENT_TABLE_WRITE(server_conf, partition_id) && !MEHCACHED_CONCURRENT_ALLOC_WRITE(server_conf, partition_id)) ? thread_id : 0);
         else
             alloc_id = 0;
+
+        //printf("[DEBUG] alloc id %u\n", alloc_id);
         uint32_t expire_time = 0;
         bool overwrite = false;
         if (mehcached_set(alloc_id, partition, key_hash, (const uint8_t *)key, key_length, (const uint8_t *)value, prepopulation_conf->value_length, expire_time, overwrite))
@@ -1416,16 +1557,34 @@ mehcached_benchmark_server(int cpu_mode, int port_mode)
     make_prepopulation_conf(prepopulation_conf);
 
 
-    mehcached_stopwatch_init_start();
+    // using num_items command line inpt
+    // for (int i = 0; i < server_conf->num_partitions; i++)
+    // {
+    //     server_conf->partitions[i].num_items = 
+    // }
 
+    // mehcached_stopwatch_init_start();
+
+    //not using NUMA
+    #ifndef USE_NOT_SHM
     printf("initializing shm\n");
-
     const size_t page_size = 1048576 * 2;
-    const size_t num_numa_nodes = 1; // 2
-    const size_t num_pages_to_try = 4096;
-    const size_t num_pages_to_reserve = 4096 - 1024;	// give 2048 pages to dpdk
+    const size_t num_numa_nodes = 1;
+    const size_t num_pages_to_try = 3072;// 4GB //16384;
+    const size_t num_pages_to_reserve = 3072 - 1024;//16384 - 2048;	// give 2048 pages to dpdk
 
     mehcached_shm_init(page_size, num_numa_nodes, num_pages_to_try, num_pages_to_reserve);
+
+    char memory_str[10];
+    snprintf(memory_str, sizeof(memory_str), "%zu", (num_pages_to_try - num_pages_to_reserve) * 2);   // * 2 is because the used huge page size is 2 MB
+    #else
+    // preallocate hugepage num = 3072, 6GB
+    // const size_t num_hugepage = 2048; 
+    const size_t num_hugepage = 3072*2;
+     // define hugepage 
+    char memory_str[10];
+    snprintf(memory_str, sizeof(memory_str), "%zu", (num_hugepage));   // * 2 is because the used huge page size is 2 MB
+    #endif
 
     printf("initializing DPDK\n");
     printf("num_threads : %d \n", server_conf->num_threads);
@@ -1433,18 +1592,23 @@ mehcached_benchmark_server(int cpu_mode, int port_mode)
     char cpu_mask_str[10];
     snprintf(cpu_mask_str, sizeof(cpu_mask_str), "%lx", cpu_mask);
 
-    char memory_str[10];
-    snprintf(memory_str, sizeof(memory_str), "%zu", (num_pages_to_try - num_pages_to_reserve) * 2);   // * 2 is because the used huge page size is 2 MB
+   
     
    char *rte_argv[] = {"",
-        "-l", "0-1",
-        "-n", "1",    // 4 for server 
+        "-l", "0",
+        "-n", "4",    // 4 for server 
         "-m", memory_str,
+        //"--log-level=pmd.tx,debug",
+        //"--log-level=pmd.rx,debug",
+        //"--log-level=ethdev,debug",
     };
+
     int rte_argc = sizeof(rte_argv) / sizeof(rte_argv[0]); 
     
     //rte_set_log_level(RTE_LOG_DEBUG);
-    rte_log_set_global_level(RTE_LOG_NOTICE);
+    //rte_log_set_global_level(RTE_LOG_DEBUG);
+    // change log stream stderr -> stdout
+    rte_openlog_stream(stdout);
 
     int ret = rte_eal_init(rte_argc, rte_argv);
     if (ret < 0)
@@ -1452,6 +1616,8 @@ mehcached_benchmark_server(int cpu_mode, int port_mode)
         fprintf(stderr, "failed to initialize EAL\n");
         return;
     }
+
+    
 
     uint8_t num_ports_max;
     uint64_t port_mask = ((size_t)1 << server_conf->num_ports) - 1;
@@ -1462,18 +1628,31 @@ mehcached_benchmark_server(int cpu_mode, int port_mode)
     }
     assert(server_conf->num_ports <= num_ports_max);
 
-
+    // ToDo, using preallocated mac instead of server config mac addr
     printf("setting MAC address\n");
     uint8_t port_id;
     for (port_id = 0; port_id < server_conf->num_ports; port_id++)
     {
         struct rte_ether_addr mac_addr;
+        /*
         memcpy(&mac_addr, server_conf->ports[port_id].mac_addr, sizeof(struct rte_ether_addr));
         if (rte_eth_dev_mac_addr_add(port_id, &mac_addr, 0) != 0)
         {
             fprintf(stderr, "failed to add a MAC address\n");
             return;
         }
+        */
+       if(rte_eth_dev_is_valid_port(port_id))
+       {
+            rte_eth_macaddr_get(port_id, &(mac_addr));
+            printf("    MAC address for port #%d:\n", port_id);
+            printf("        ");
+            for (int j = 0; j < RTE_ETHER_ADDR_LEN; ++j) {
+                printf("%02X:", mac_addr.addr_bytes[j]);
+            }
+            printf("\n");
+       }
+        
     }
 
 
@@ -1540,12 +1719,13 @@ printf("configuring mappings\n");
 
     rte_eal_mp_wait_lcore();
 
+
     for (port_id = 0; port_id < server_conf->num_ports; port_id++)
         rte_eth_stats_reset(port_id);
 
 
     printf("initializing server states\n");
-
+    // not using shm
     size_t mem_start = mehcached_get_memuse();
 
     struct server_state *states[server_conf->num_threads];
@@ -1555,9 +1735,20 @@ printf("configuring mappings\n");
 
     for (thread_id = 0; thread_id < server_conf->num_threads; thread_id++)
     {
+        // ToDo : server_state memory allocating in numa x -> using rte_malloc (allocate in hugepage area) 
+        // using thread_id for specifying where thread is located in NUMA aware system
+        // so, don't need if not using numa
+        #ifndef USE_NOT_SHM
         struct server_state *state = mehcached_shm_malloc_contiguous(sizeof(struct server_state), thread_id);
+        #else
+        struct server_state *state = rte_zmalloc(NULL, sizeof(struct server_state), 0);
+        #endif
+        if (state == NULL)
+            printf("[ERROR] Memory allocation for server_state failed!!\n");
+
         states[thread_id] = state;
-        memset(state, 0, sizeof(struct server_state));
+        // rte_zmalloc -> initializing 0 when alloc mem
+        //memset(state, 0, sizeof(struct server_state));
 
         state->server_conf = server_conf;
         state->prepopulation_conf = prepopulation_conf;
@@ -1587,6 +1778,8 @@ printf("configuring mappings\n");
 #endif
         state->cpu_mode = cpu_mode;
         state->port_mode = port_mode;
+
+        printf("[DEBUG] no error for server state set up!! \n");
     }
 
 #ifdef NETBENCH_SERVER_MEHCACHED
@@ -1618,17 +1811,44 @@ printf("configuring mappings\n");
         num_items = num_items * 12 / 10;
         alloc_size = alloc_size * 12 / 10;
 
-        partitions[partition_id] = mehcached_shm_malloc_contiguous(sizeof(struct mehcached_table), thread_id);
+        // for debugging
+        // printf("[DEBUG] thread_id: %u\n", thread_id);
+        // printf("[DEBUG] num_allocs: %u\n", num_allocs);
+        // printf("[DEBUG] num_items: %lu\n", num_items);
+        // printf("[DEBUG] alloc_size: %lu\n", alloc_size);
+        // printf("[DEBUG] mth_threshold: %lf\n", mth_threshold);
+        // printf("[DEBUG] alloc_overhead (sizeof(struct mehcached_item)): %zu\n", alloc_overhead);
+        // printf("[DEBUG] num_items after increasing : %lu\n", num_items);
+        // printf("[DEBUG] alloc_size after increasing : %lu\n", alloc_size);
 
-        size_t table_numa_node = rte_lcore_to_socket_id((unsigned int)thread_id);
+        // ToDo : server_state memory allocating in numa x -> using rte_malloc (allocate in hugepage area)
+        #ifndef USE_NOT_SHM 
+        partitions[partition_id] = mehcached_shm_malloc_contiguous(sizeof(struct mehcached_table), thread_id);
+        #else
+        partitions[partition_id] = rte_zmalloc(NULL, sizeof(struct mehcached_table), 0);
+        #endif
+        if (partitions[partition_id] == NULL)
+        {
+            printf("[ERROR] Memory allocation for partition failed!!\n");
+            exit(1);
+        }
+            
+
+        size_t table_numa_node = rte_lcore_to_socket_id((unsigned int)thread_id); // always 0, because of not using numa
         size_t alloc_numa_nodes[num_allocs];
         uint8_t alloc_id;
         for (alloc_id = 0; alloc_id < num_allocs; alloc_id++)
             alloc_numa_nodes[alloc_id] = table_numa_node;
+        //printf("[DEBUG] alloc numa node size %zu\n", sizeof(alloc_numa_nodes));
+        //printf("[DEBUG] table numa node %zu\n", table_numa_node);
 
         bool concurrent_table_read = MEHCACHED_CONCURRENT_TABLE_READ(server_conf, partition_id);
         bool concurrent_table_write = MEHCACHED_CONCURRENT_TABLE_WRITE(server_conf, partition_id);
         bool concurrent_alloc_write = MEHCACHED_CONCURRENT_ALLOC_WRITE(server_conf, partition_id);
+        
+        if(!concurrent_table_read && !concurrent_table_write && !concurrent_alloc_write)
+            printf("[SETUP] concurrent deactivate \n");
+
         mehcached_table_init(partitions[partition_id],
             (num_items + MEHCACHED_ITEMS_PER_BUCKET - 1) / MEHCACHED_ITEMS_PER_BUCKET,
             num_allocs,
@@ -1645,7 +1865,16 @@ printf("configuring mappings\n");
         uint64_t num_items = 256;
         uint64_t alloc_size = 2048576;
 
+
+        // ToDo : server_state memory allocating in numa x -> using rte_malloc (allocate in hugepage area)
+        
+        #ifndef USE_NOT_SHM
         partitions[partition_id] = mehcached_shm_malloc_contiguous(sizeof(struct mehcached_table), thread_id);
+        #else
+        partitions[partition_id] = rte_zmalloc(NULL, sizeof(struct mehcached_table), 0);
+        #endif
+        if (partitions[partition_id] == NULL)
+            printf("[ERROR] Memory allocation for partition failed!!\n");
 
         size_t table_numa_node = rte_lcore_to_socket_id((unsigned int)thread_id);
         size_t alloc_numa_nodes[num_allocs];
@@ -1727,10 +1956,10 @@ printf("configuring mappings\n");
     }
 #endif
 
-    mehcached_stopwatch_init_end();
+    // mehcached_stopwatch_init_end();
 
     printf("prepopulating servers\n");
-
+    
     // for (thread_id = 1; thread_id < server_conf->num_threads; thread_id++)
     //     rte_eal_launch(mehcached_benchmark_prepopulate_proc, states, (unsigned int)thread_id);
     // rte_eal_launch(mehcached_benchmark_prepopulate_proc, states, 0);
@@ -1746,7 +1975,8 @@ printf("configuring mappings\n");
 
     size_t mem_diff = mehcached_get_memuse() - mem_start;
     printf("memory:   %10.2lf MB\n", (double)mem_diff * 0.000001);
-
+    
+   
     printf("running servers\n");
 
     struct sigaction new_action;
@@ -1756,8 +1986,20 @@ printf("configuring mappings\n");
     sigaction(SIGINT, &new_action, NULL);
     sigaction(SIGTERM, &new_action, NULL);
 
+    // print stat about dpdk malloc_heap
+    rte_malloc_dump_stats(stdout, NULL);
+    rte_malloc_dump_heaps(stdout);
+    fflush(stdout);
+
     // use this for diagnosis (the actual server will not be run)
     // mehcached_diagnosis(server_conf);
+     /* If we are in simulation, take checkpoint here. */
+#ifdef _GEM5_
+    system("cat /proc/meminfo | grep -i huge"); // check rte_zmalloc using hugepage
+    fprintf(stderr, "Taking post-initialization checkpoint.\n");
+    system("m5 checkpoint");
+    //m5_checkpoint(0,0);
+#endif
 
     for (thread_id = 1; thread_id < server_conf->num_threads; thread_id++)
     {
@@ -1770,6 +2012,16 @@ printf("configuring mappings\n");
 
 
     // mehcached_free_network(port_mask);
+    // free state & table because of not using shm
+    // Only consider thread_id = 0 because 
+    //free(states[0]);
+    rte_free(states[0]);
+    for (partition_id = 0; partition_id < server_conf->num_partitions; partition_id++)
+    {
+        //free(partitions[partition_id]);
+        rte_free(partitions[partition_id]);
+    }
+        
 
     printf("finished\n");
 }
@@ -1777,6 +2029,8 @@ printf("configuring mappings\n");
 int
 main(int argc, const char *argv[])
 {
+
+
 #ifndef MEHCACHED_MEASURE_LATENCY
     if (argc < 3)
     {

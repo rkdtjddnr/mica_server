@@ -201,6 +201,9 @@ mehcached_shm_init(size_t page_size, size_t num_numa_nodes, size_t num_pages_to_
 		strncpy(mehcached_shm_pages[page_id].path, path, PATH_MAX);
 		mehcached_shm_pages[page_id].addr = p;
 		//printf("initial allocation of %zu on %p\n", page_size, p);
+		#ifndef USE_NUMA
+		mehcached_shm_pages[page_id].numa_node = 0;
+		#endif
 	}
 	num_allocated_pages = page_id;
 
@@ -210,6 +213,7 @@ mehcached_shm_init(size_t page_size, size_t num_numa_nodes, size_t num_pages_to_
 	printf("sorting by virtual address\n");
     qsort(mehcached_shm_pages, num_allocated_pages, sizeof(struct mehcached_shm_page), mehcached_shm_compare_vaddr);
 
+	#ifdef USE_NUMA
 	// detect numa socket
 	printf("detecting NUMA mapping\n");
 	FILE *f = fopen("/proc/self/numa_maps", "r");
@@ -255,6 +259,8 @@ mehcached_shm_init(size_t page_size, size_t num_numa_nodes, size_t num_pages_to_
 		printf("error: unable to get NUMA mapping information for all pages (/proc/self/numa_maps may be not sorted by virtual address)\n");
 		assert(false);
 	}
+	#endif
+
 
     // get physical address (pagemap.txt)
 	printf("detecting physical address of pages\n");
@@ -292,6 +298,8 @@ mehcached_shm_init(size_t page_size, size_t num_numa_nodes, size_t num_pages_to_
 
     // sort by physical address
 	printf("sorting by physical address\n");
+	qsort(mehcached_shm_pages, num_allocated_pages, sizeof(struct mehcached_shm_page), mehcached_shm_compare_paddr);
+	
     // for (page_id = 0; page_id < num_allocated_pages - 1; page_id++)
     // {
     //     size_t page_id2;
@@ -306,7 +314,7 @@ mehcached_shm_init(size_t page_size, size_t num_numa_nodes, size_t num_pages_to_
     //         }
     //     }
     // }
-    qsort(mehcached_shm_pages, num_allocated_pages, sizeof(struct mehcached_shm_page), mehcached_shm_compare_paddr);
+    
 
 	// throw away surplus pages on each numa node
 	printf("releasing unnecessary pages\n");

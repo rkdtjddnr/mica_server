@@ -26,18 +26,18 @@
 // SAME AS CLIENT CONFIG 
 #define PER_TH_PORT 1 // number of port for each thread
 #define NUM_PORT 1 // number of port
-#define NUM_QUEUE 2 // number of queue
+#define NUM_QUEUE 1 // number of queue
 
 
-#define NUM_THREAD 2 // number of thread
-#define NUM_PART 2 // number of partition
+#define NUM_THREAD 1 // number of thread
+#define NUM_PART 1 // number of partition
 #define MAC_SZ 6 // mac addr array size
 #define IP_SZ 4 // ip addr array size
 
-#define NUM_CORE 2
+#define NUM_CORE 1
 #define KEY_LEN 8 
 #define VAL_LEN 8
-#define NUM_ITEMS 1048576
+#define NUM_ITEMS 1048576 //12*1048576 //8192 //1048576 / 16 -> per core
 #define NUM_HOT_ITEMS 64
 
 #define NUM_PREPOP NUM_ITEMS // prepopulation dataset size
@@ -47,7 +47,7 @@
 #define GET_RATIO 0.95
 #define PUT_RATIO (1 - GET_RATIO)
 #define INC_RATIO 0.0
-#define BATCH_SZ 2
+#define BATCH_SZ 1
 #define NUM_OP 16384 //operation size
 #define DURATION 0.0
 

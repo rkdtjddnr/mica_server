@@ -28,31 +28,27 @@
 #include <rte_log.h>
 #include <rte_debug.h>
 
-#define MEHCACHED_MBUF_ENTRY_SIZE (2048 + sizeof(struct rte_mbuf) + RTE_PKTMBUF_HEADROOM)
-#define MEHCACHED_MBUF_SIZE (NUM_PORT * NUM_QUEUE * 4096)     // TODO: need to divide by numa node count
 
-#define MEHCACHED_MAX_PKT_BURST (32)
-
-#define MEHCACHED_RX_PTHRESH (8)
-#define MEHCACHED_RX_HTHRESH (8)
-#define MEHCACHED_RX_WTHRESH (4)
-
-#define MEHCACHED_TX_PTHRESH (36)
-#define MEHCACHED_TX_HTHRESH (0)
-#define MEHCACHED_TX_WTHRESH (0)
-
-#define RTE_TEST_RX_DESC_DEFAULT (128)
-#define RTE_TEST_TX_DESC_DEFAULT (512)
 static uint16_t mehcached_num_rx_desc = RTE_TEST_RX_DESC_DEFAULT;
 static uint16_t mehcached_num_tx_desc = RTE_TEST_TX_DESC_DEFAULT;
 
 //#define MEHCACHED_USE_QUICK_SLEEP
 //#define MEHCACHED_USE_DEEP_SLEEP
 
+// New config for mica mempool
+#define RTE_MBUF_DEFAULT_DATAROOM 2048
+#define RTE_MBUF_DEFAULT_BUF_SIZE (RTE_MBUF_DEFAULT_DATAROOM + RTE_PKTMBUF_HEADROOM)
+//#define RTE_MBUF_DEFAULT_BUF_SIZE (RTE_ETHER_MAX_LEN + RTE_PKTMBUF_HEADROOM)
+#define DEF_MBUF_CACHE 250
+
+#define TXMBUF_ADDR 0
+
+
 static const struct rte_eth_conf mehcached_port_conf = {
 	.rxmode = {
         .max_rx_pkt_len = RTE_ETHER_MAX_LEN,
 		.split_hdr_size = 0,
+		.offloads = 0x0,
 		//.header_split   = 0, /**< Header Split disabled */
 		//.hw_ip_checksum = 0, /**< IP checksum offload disabled */
 		//.hw_vlan_filter = 0, /**< VLAN filtering disabled */
@@ -261,8 +257,18 @@ mehcached_receive_packets(uint8_t port_id, struct rte_mbuf **mbufs, size_t *in_o
 	// assert(queue != (uint16_t)-1);
 	uint16_t queue = (uint16_t)lcore;
 	struct mehcached_queue_state *state = mehcached_queue_states[queue * NUM_PORT + port_id];
-
+	//printf("[MICA] Starting RX from igbe !! \n");
 	*in_out_num_mbufs = (size_t)rte_eth_rx_burst(port_id, queue, mbufs, (uint16_t)*in_out_num_mbufs);
+	if (*in_out_num_mbufs == 0)
+	{
+		//printf("[MICA] Nothing from igbe..... return... \n");
+		return 0;
+	}
+	else
+	{
+		//printf("[MICA] %u packets from igbe\n", *in_out_num_mbufs);
+	}
+		
 	state->num_rx_received += *in_out_num_mbufs;
 	state->num_rx_burst++;
 }
@@ -276,11 +282,17 @@ mehcached_send_packet(uint8_t port_id, struct rte_mbuf *mbuf)
 	uint16_t queue = (uint16_t)lcore;
 	struct mehcached_queue_state *state = mehcached_queue_states[queue * NUM_PORT + port_id];
 
+	//printf("[MICA] mehcached_send_packet: lcore=%zu, port=%zu, queue=%zu\n", lcore, port_id, queue);
 #ifndef NDEBUG
     //printf("mehcached_send_packet: lcore=%zu, port=%zu, queue=%zu\n", lcore, port, queue);
 #endif
-
+	#if TXMBUF_ADDR == 1
+	// log for first mbuf in every loop
+	if(state->tx_length == 0)
+		printf("[MICA] tx mbuf physical addr 0x%lx \n", rte_mbuf_data_iova_default(mbuf));
+	#endif
 	state->tx_mbufs[state->tx_length++] = mbuf;
+	
 	if (state->tx_length == MEHCACHED_MAX_PKT_BURST)
 	{
 		uint16_t count = rte_eth_tx_burst(port_id, queue, state->tx_mbufs, MEHCACHED_MAX_PKT_BURST);
@@ -389,7 +401,8 @@ mehcached_init_network(uint64_t cpu_mask, uint64_t port_mask, uint8_t *out_num_p
 		// the maximum cache size can be adjusted in DPDK's .config file: CONFIG_RTE_MEMPOOL_CACHE_MAX_SIZE
 		const unsigned int cache_size = NUM_PORT * 512;
 		//mehcached_pktmbuf_pool[i] = rte_mempool_create(pool_name, MEHCACHED_MBUF_SIZE, MEHCACHED_MBUF_ENTRY_SIZE, cache_size, sizeof(struct rte_pktmbuf_pool_private), rte_pktmbuf_pool_init, NULL, rte_pktmbuf_init, NULL, (int)i, 0);
-		mehcached_pktmbuf_pool[i] = rte_pktmbuf_pool_create(pool_name, 4096*2, 0, 0, 1500+sizeof(struct rte_mbuf)+RTE_PKTMBUF_HEADROOM, SOCKET_ID_ANY);
+		//mehcached_pktmbuf_pool[i] = rte_pktmbuf_pool_create(pool_name, 4096*2, 0, 0, 1500+sizeof(struct rte_mbuf)+RTE_PKTMBUF_HEADROOM, SOCKET_ID_ANY);
+		mehcached_pktmbuf_pool[i] = rte_pktmbuf_pool_create(pool_name, 4096*2, DEF_MBUF_CACHE, 0, RTE_MBUF_DEFAULT_BUF_SIZE, SOCKET_ID_ANY);
 		printf("[DEBUG] memory pool pointer %p \n", mehcached_pktmbuf_pool[i]);
 		if (mehcached_pktmbuf_pool[i] == NULL)
 		{

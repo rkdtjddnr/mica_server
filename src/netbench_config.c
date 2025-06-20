@@ -99,7 +99,7 @@ void make_server_config(struct mehcached_server_conf* s_conf)
     printf("[CONFIG] making server partition conf \n");
     uint64_t total_alloc_size = NUM_ITEMS * (KEY_LEN + VAL_LEN);  // key_len + val_len
     double mth_threshold = 1.0;
-    enum ConcurrencyType concurrency = CREW;
+    enum ConcurrencyType concurrency = EREW;
 
     fill_partitions(s_conf, NUM_PART, NUM_ITEMS, total_alloc_size, mth_threshold, concurrency);
 

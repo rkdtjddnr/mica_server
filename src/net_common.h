@@ -24,6 +24,23 @@
 // #define MEHCACHED_MAX_PORTS (1) //(8)
 // #define MEHCACHED_MAX_QUEUES (2) //(16)
 
+#define MEHCACHED_MBUF_ENTRY_SIZE (2048 + sizeof(struct rte_mbuf) + RTE_PKTMBUF_HEADROOM)
+#define MEHCACHED_MBUF_SIZE (NUM_PORT * NUM_QUEUE * 4096)     // TODO: need to divide by numa node count
+
+#define MEHCACHED_MAX_PKT_BURST (64)
+
+#define MEHCACHED_RX_PTHRESH (8)
+#define MEHCACHED_RX_HTHRESH (8)
+#define MEHCACHED_RX_WTHRESH (4)
+
+#define MEHCACHED_TX_PTHRESH (36)
+#define MEHCACHED_TX_HTHRESH (0)
+#define MEHCACHED_TX_WTHRESH (0)
+
+// Descriptor number setting
+#define RTE_TEST_RX_DESC_DEFAULT (1024)
+#define RTE_TEST_TX_DESC_DEFAULT (1024)
+
 struct rte_mbuf *
 mehcached_packet_alloc();
 

@@ -20,6 +20,7 @@
 
 MEHCACHED_BEGIN
 
+#ifndef USE_NOT_SHM
 static
 void
 mehcached_pool_init(struct mehcached_pool *alloc, uint64_t size, bool concurrent_alloc_read, bool concurrent_alloc_write, size_t numa_node)
@@ -76,14 +77,62 @@ mehcached_pool_init(struct mehcached_pool *alloc, uint64_t size, bool concurrent
     }
 }
 
+#else
+
+// Not using shm
+static
+void
+mehcached_pool_init(struct mehcached_pool *alloc, uint64_t size, bool concurrent_alloc_read, bool concurrent_alloc_write, size_t numa_node)
+{
+    if (size < MEHCACHED_MINIMUM_POOL_SIZE)
+        size = MEHCACHED_MINIMUM_POOL_SIZE;
+    size = mehcached_shm_adjust_size(size);
+    size = mehcached_next_power_of_two(size);
+    assert(size <= MEHCACHED_ITEM_OFFSET_MASK >> 1);    // ">> 1" is for sufficient garbage collection time
+    assert(size == mehcached_shm_adjust_size(size));
+
+    if (!concurrent_alloc_read)
+        alloc->concurrent_access_mode = 0;
+    else if (!concurrent_alloc_write)
+        alloc->concurrent_access_mode = 1;
+    else
+        alloc->concurrent_access_mode = 2;
+
+    alloc->size = size;
+    alloc->mask = size - 1;
+
+    alloc->lock = 0;
+    alloc->head = alloc->tail = 0;
+    
+
+    //alloc->data = malloc(size + MEHCACHED_MINIMUM_POOL_SIZE);
+    alloc->data = rte_zmalloc(NULL, size + MEHCACHED_MINIMUM_POOL_SIZE, 0);
+    if (alloc->data == NULL)
+    {
+        printf("failed to allocate memory\n");
+        assert(false);  // 메모리 할당 실패 시 강제 종료
+    } 
+    
+    //memset(alloc->data, 0, size + MEHCACHED_MINIMUM_POOL_SIZE);
+
+}
+#endif
+
+
+
 static
 void
 mehcached_pool_free(struct mehcached_pool *alloc)
 {
+    #ifndef USE_NOT_SHM
 	if (!mehcached_shm_unmap(alloc->data))
 		assert(false);
 	if (!mehcached_shm_unmap(alloc->data + alloc->size))
 		assert(false);
+    #else
+    //free(alloc->data);
+    rte_free(alloc->data);
+    #endif
 }
 
 static
