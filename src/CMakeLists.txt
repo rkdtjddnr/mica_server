@@ -14,6 +14,7 @@
 
 cmake_minimum_required (VERSION 3.16)
 
+
 # basic configuration
 if(CMAKE_CURRENT_SOURCE_DIR STREQUAL CMAKE_CURRENT_BINARY_DIR)
 	message(FATAL_ERROR "Use out-of-source build only!")
@@ -96,6 +97,8 @@ include_directories($ENV{RTE_SDK}/lib/librte_ring)
 include_directories($ENV{RTE_SDK}/lib/librte_pdump)
 include_directories($ENV{RTE_SDK}/lib/librte_kvargs)
 #include_directories($ENV{GIT_ROOT}/gem5/include)
+
+
 link_libraries(
         -L$ENV{RTE_SDK}/build/drivers
         -L$ENV{RTE_SDK}/build/lib

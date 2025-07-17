@@ -19,6 +19,8 @@
 #include "alloc_malloc.h"
 #include "alloc_dynamic.h"
 
+#define USE_NOT_SHM
+
 MEHCACHED_BEGIN
 
 #define MEHCACHED_MAX_KEY_LENGTH (255)

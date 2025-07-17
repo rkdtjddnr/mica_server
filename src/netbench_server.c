@@ -41,6 +41,7 @@
 //#include <gem5/m5ops.h>
 
 
+
 #if !defined(NETBENCH_SERVER_MEMCACHED) && !defined(NETBENCH_SERVER_MASSTREE) && !defined(NETBENCH_SERVER_RAMCLOUD)
 #define NETBENCH_SERVER_MEHCACHED
 #endif
@@ -116,6 +117,10 @@ struct server_state
     uint64_t last_bytes_tx;
     uint64_t last_num_per_partition_ops[NUM_PART];
     uint16_t packet_size;
+    
+    #ifdef USE_ENSO
+    EnsoDevice_t* ensoDevice;
+    #endif
 
 #ifdef MEHCACHED_USE_SOFT_FDIR
     // struct rte_ring *soft_fdir_mailbox[NUM_THREAD] __rte_cache_aligned;
@@ -270,6 +275,171 @@ mehcached_benchmark_consume_packets_proc(void *arg)
     return 0;
 }
 
+#ifdef USE_ENSO
+struct RXTXState 
+{
+    //EndpointId eid;
+    //enso::TxPipe* tx_pipe;
+
+    struct PendingTX {
+
+    uint8_t* start_tx_buffer;
+    uint8_t* current_tx_buffer;
+
+    uint16_t count;
+    uint64_t oldest_time;
+    } pending_tx;
+};
+// for maintain current enso pipe state used by host
+typedef struct MicaProcessingUnit
+{
+    uint32_t avail_bytes;
+    uint8_t* rx_buf; // Enso Pipe Start addr for packet processing
+    uint8_t* end_of_buffer;
+
+    // maintain state
+    int32_t missing_messages; // = burstSize; will be decline
+    uint32_t remaining_bytes; // = availByte;, will be decline
+    uint32_t received; // count for received packet
+    uint32_t end; // flag for current buffer is consumed all
+
+    uint8_t* addr;
+    uint8_t* next_addr;
+
+}MicaProcessingUnit_t;
+
+void
+setProcessingUnit(RxEnsoPipe_t* rx_pipe, MicaProcessingUnit_t* mica_unit, uint32_t new_rx_bytes, uint8_t* new_rx_buf, int32_t burst_size)
+{
+    mica_unit->rx_buf = new_rx_buf;
+    mica_unit->avail_bytes = new_rx_bytes;
+    mica_unit->end_of_buffer = (uint8_t*)rx_pipe->buf + ENSO_BUF_SIZE;
+
+    mica_unit->missing_messages = burst_size;
+    mica_unit->remaining_bytes = new_rx_bytes;
+    mica_unit->received = 0;
+    mica_unit->end = burst_size;
+
+    mica_unit->addr = new_rx_buf;
+    mica_unit->next_addr = new_rx_buf;//getNextPkt(mica_unit->addr);
+
+}
+
+uint16_t be_to_le_16(const uint16_t le) {
+  return ((le & (uint16_t)0x00ff) << 8) | ((le & (uint16_t)0xff00) >> 8);
+}
+
+uint16_t get_pkt_len(const uint8_t* addr) {
+    const struct rte_ether_hdr* l2_hdr = (struct rte_ether_hdr*)addr;
+    const struct rte_ipv4_hdr* l3_hdr = (struct rte_ipv4_hdr*)(l2_hdr + 1);
+    const uint16_t total_len = be_to_le_16(l3_hdr->total_length) + sizeof(struct rte_ether_hdr);
+    //printf("[DEBUG] host get_pkt_len func total_len %u \n", total_len);
+    
+    return total_len;
+}
+
+uint8_t* getNextPkt(uint8_t* pkt)
+{
+    uint32_t pkt_len = get_pkt_len(pkt);
+    //uint32_t pkt_len = getMemcPktLen(pkt); // for memcached
+    uint32_t nb_flits = (pkt_len - 1) / 64 + 1;
+    //printf("[DEBUG] pkt_len: %u, nb_flits: %u\n", pkt_len, nb_flits);
+
+    return pkt + nb_flits * 64;
+}
+
+struct mehcached_batch_packet* 
+getPacketFromRxPipe(MicaProcessingUnit_t* mica_unit)
+{
+    if((mica_unit->missing_messages > 0) && (mica_unit->remaining_bytes > 0))
+    {
+        mica_unit->addr = mica_unit->next_addr;
+        if(mica_unit->addr >= mica_unit->end_of_buffer)
+        {
+            printf("[WARN] addr reached end_of_buffer, received=%u\n",mica_unit->received);
+            mica_unit->end = mica_unit->received;
+            return NULL;
+        }
+        mica_unit->next_addr = getNextPkt(mica_unit->next_addr);
+        uint32_t consumed = mica_unit->next_addr - mica_unit->addr;
+
+        mica_unit->remaining_bytes -= consumed;
+        --mica_unit->missing_messages;
+        ++mica_unit->received;
+
+        return (struct mehcached_batch_packet* )mica_unit->addr;
+    }
+    else
+    {
+        printf("[WARN] complete processing %u pkts\n", mica_unit->received);
+        mica_unit->end = mica_unit->received;
+        return NULL;
+    }
+}
+
+void
+setPacketToTxPipe(struct server_state *state, struct RXTXState* rxTxState)
+{
+    struct mehcached_batch_packet *packet = (struct mehcached_batch_packet *)rxTxState->pending_tx.current_tx_buffer;
+    
+    // update stats
+    uint8_t request_index;
+    const uint8_t *next_key = packet->data + sizeof(struct mehcached_request) * (size_t)packet->num_requests;
+    for (request_index = 0; request_index < packet->num_requests; request_index++)
+    {
+        struct mehcached_request *req = (struct mehcached_request *)packet->data + request_index;
+
+        state->num_operations_done++;
+
+        if (*(const uint64_t *)next_key == 0)
+            state->num_key0_operations_done++;
+
+        if (req->result == MEHCACHED_OK)
+            state->num_operations_succeeded++;
+
+        next_key += MEHCACHED_ROUNDUP8(MEHCACHED_KEY_LENGTH(req->kv_length_vec)) + MEHCACHED_ROUNDUP8(MEHCACHED_VALUE_LENGTH(req->kv_length_vec));
+    }
+
+    struct rte_ether_hdr *eth = (struct rte_ether_hdr *)rxTxState->pending_tx.current_tx_buffer;
+    struct rte_ipv4_hdr *ip = (struct rte_ipv4_hdr *)((unsigned char *)eth + sizeof(struct rte_ether_hdr));
+    struct rte_udp_hdr *udp = (struct rte_udp_hdr *)((unsigned char *)ip + sizeof(struct rte_ipv4_hdr));
+
+    uint16_t packet_length = (uint16_t)(next_key - (uint8_t *)packet);
+
+#ifdef MEHCACHED_ENABLE_THROTTLING
+    // server load feedback
+    // abuse the opaque field because it is going to be used for flow control anyway if clients can do full RX
+    packet->opaque = state->target_request_rate;
+#endif
+
+    // TODO: update IP checksum
+
+    // swap source and destination
+    {
+        struct rte_ether_addr t = eth->s_addr;
+        eth->s_addr = eth->d_addr;
+        eth->d_addr = t;
+    }
+    {
+        uint32_t t = ip->src_addr;
+        ip->src_addr = ip->dst_addr;
+        ip->dst_addr = t;
+    }
+    {
+        uint16_t t = udp->src_port;
+        udp->src_port = udp->dst_port;
+        udp->dst_port = t;
+    }
+
+    // reset TTL
+    ip->time_to_live = 64;
+
+    ip->total_length = rte_cpu_to_be_16((uint16_t)(packet_length - sizeof(struct rte_ether_hdr)));
+    udp->dgram_len = rte_cpu_to_be_16((uint16_t)(packet_length - sizeof(struct rte_ether_hdr) - sizeof(struct rte_ipv4_hdr)));
+
+}
+#endif
+
 static
 int
 mehcached_benchmark_server_proc(void *arg)
@@ -386,10 +556,13 @@ mehcached_benchmark_server_proc(void *arg)
     }
 #endif
 
-
+#ifndef USE_ENSO
     const size_t pipeline_size = MEHCACHED_MAX_PKT_BURST;
     const size_t max_pending_packets = MEHCACHED_MAX_PKT_BURST;
-
+#else
+    const size_t enso_pipeline_size = 1024; // same as enso burst size
+    const size_t max_pending_packets = 1024;
+#endif
 #define USE_STAGE_GAP
 
 #ifndef USE_STAGE_GAP
@@ -414,6 +587,7 @@ mehcached_benchmark_server_proc(void *arg)
     uint32_t acc_p = 0;
     #endif
 
+#ifndef USE_ENSO
     while (!exiting)
     {
 #ifndef USE_STAGE_GAP
@@ -1247,6 +1421,334 @@ mehcached_benchmark_server_proc(void *arg)
         */
     }
 
+#else
+
+    // ENSO Initializing
+    // assume only 1 port
+    /*=============== Enso Initializing ===============*/
+    EnsoDevice_t* ensoDevice = state->ensoDevice;// rte_eth_enso_device_init(thread_id, 0);
+    struct RXTXState rxTxState;
+    rxTxState.pending_tx.count = 0;
+    rxTxState.pending_tx.current_tx_buffer = NULL;
+    rxTxState.pending_tx.start_tx_buffer = NULL;
+    
+    
+    uint32_t target_size = 1536*enso_pipeline_size; // allocate size for TX buffer, need to change??
+    
+    // int notif_ret = rte_eth_notif_init(ensoDevice);
+    // int rx_enso_ret = rte_eth_rx_enso_init(ensoDevice);
+    // int tx_enso_ret = rte_eth_tx_enso_init(ensoDevice);
+
+    // if(notif_ret < 0 || rx_enso_ret < 0 || tx_enso_ret < 0)
+    // {
+    //     printf("failed to initialize ENSO\n");
+    //     return 0;
+    // }
+    // else
+    //     printf("======finish initializing ENSO buffer======\n");
+
+    MicaProcessingUnit_t mica_unit;
+
+    /*=============== Enso Initializing finished ===============*/
+
+    while (!exiting)
+    {
+        // invariant: 0 <= stage3_index <= stage2_index <= stage1_index <= stage0_index <= packet_count <= pipeline_size
+        size_t packet_count = 0;
+        size_t stage0_index = 0;
+        size_t stage1_index = 0;
+        size_t stage2_index = 0;
+        size_t stage3_index = 0;
+
+        // RX
+        //struct rte_mbuf *packet_mbufs[pipeline_size];
+
+        // SW, change arraysize -> enso burst size 1024
+        // stage0
+        struct mehcached_batch_packet *packets[enso_pipeline_size];
+        // stage1
+        // stage1 & stage2
+#ifdef NETBENCH_SERVER_MEHCACHED
+        struct mehcached_prefetch_state prefetch_state[enso_pipeline_size][MEHCACHED_MAX_BATCH_SIZE];
+#endif
+        uint8_t port_id = thread_conf->port_ids[next_port_index];
+
+        // SW, Enso logic
+        // ENSO running process demo
+        uint8_t* buf = NULL;
+    
+        uint32_t next_rx = rte_eth_rx_enso_next(ensoDevice);
+        if(next_rx < 0) continue;
+
+        // receive packets
+        uint32_t new_byte = rte_eth_rx_enso_burst(ensoDevice, &buf);
+        assert(buf);
+        if(new_byte == 0) continue;
+        printf("======== Recieve %u bytes from Rx pipe ========\n", new_byte);
+
+        // set up tx buffer
+        uint8_t* tx_buf = rte_eth_alloc_tx_buffer(ensoDevice, target_size);
+        assert(tx_buf);
+        rxTxState.pending_tx.current_tx_buffer = tx_buf;
+        rxTxState.pending_tx.start_tx_buffer = tx_buf;
+        setProcessingUnit(ensoDevice->rx_pipe, &mica_unit, new_byte, buf, enso_pipeline_size);
+
+
+        t_end = mehcached_stopwatch_now();
+        
+
+        // update RX byte statistics
+        {
+            // size_t packet_index;
+            // for (packet_index = 0; packet_index < packet_count; packet_index++)
+            //     state->bytes_rx += (uint64_t)(packet_mbufs[packet_index]->data_len + 24);   // 24 for PHY overheads
+            state->bytes_rx += new_byte; 
+        }
+
+
+        while (stage3_index < mica_unit.end)
+        {
+          if (stage0_index < mica_unit.end && stage0_index - stage3_index < max_pending_packets && stage0_index - stage1_index < stage_gap)
+            {
+                //struct rte_mbuf *mbuf = packet_mbufs[stage0_index];
+
+                packets[stage0_index] = getPacketFromRxPipe(&mica_unit);
+                //rte_pktmbuf_mtod(mbuf, struct mehcached_batch_packet *);
+                if (packets[stage0_index] != NULL)
+                {
+                    printf("  [Stage0] limit pkt %u , prefetch %u pkt\n", mica_unit.end, stage0_index);
+                    stage0_index++;
+                }
+                else
+                {
+                    printf("  [Stage0] NULL packet returned! limit %u , current %u\n", mica_unit.end, stage0_index);
+                    // current stage0 ptr to NULL so, -1
+                    stage0_index--;
+                }        
+            }
+            else if (stage1_index < stage0_index && stage1_index - stage2_index < stage_gap)
+            {
+#ifdef NETBENCH_SERVER_MEHCACHED
+                struct mehcached_batch_packet *packet = packets[stage1_index];
+                assert(packet->num_requests <= MEHCACHED_MAX_BATCH_SIZE);
+                uint8_t request_index;
+                for (request_index = 0; request_index < packet->num_requests; request_index++)
+                {
+                    struct mehcached_request *req = (struct mehcached_request *)packet->data + request_index; // -> packet->data + 16B x request_index offset
+                    if (req->operation != MEHCACHED_NOOP_READ && req->operation != MEHCACHED_NOOP_WRITE)
+                    {
+                        uint64_t key_hash = req->key_hash;
+                        uint16_t partition_id;
+                        partition_id = mehcached_get_partition_id(state, key_hash);
+#endif
+                        struct mehcached_table *partition = state->partitions[partition_id];
+                        mehcached_prefetch_table(partition, key_hash, &prefetch_state[stage1_index][request_index]);
+                    }
+                }
+                stage1_index++;
+            }
+            else if (stage2_index < stage1_index && stage2_index - stage3_index < stage_gap)
+            {
+#ifdef NETBENCH_SERVER_MEHCACHED
+                struct mehcached_batch_packet *packet = packets[stage2_index];
+                uint8_t request_index;
+                for (request_index = 0; request_index < packet->num_requests; request_index++)
+                {
+                    struct mehcached_request *req = (struct mehcached_request *)packet->data + request_index;
+                    if (req->operation != MEHCACHED_NOOP_READ && req->operation != MEHCACHED_NOOP_WRITE)
+                        mehcached_prefetch_alloc(&prefetch_state[stage2_index][request_index]);
+                }
+#endif
+                stage2_index++;
+            }
+            else if (stage3_index < stage2_index)
+            {
+                //struct rte_mbuf *mbuf = packet_mbufs[stage3_index];
+                struct mehcached_batch_packet *response_packet = (struct mehcached_batch_packet *)rxTxState.pending_tx.current_tx_buffer;
+
+                struct mehcached_batch_packet *packet = packets[stage3_index];
+#ifdef NETBENCH_SERVER_MEHCACHED
+                struct mehcached_request *req = (struct mehcached_request *)packet->data + 0;
+                uint16_t partition_id = mehcached_get_partition_id(state, req->key_hash);
+#endif
+
+                uint8_t new_key_values[RTE_ETHER_MAX_LEN - RTE_ETHER_CRC_LEN - sizeof(struct mehcached_batch_packet)];
+                size_t new_key_value_length = RTE_ETHER_MAX_LEN - RTE_ETHER_CRC_LEN - sizeof(struct mehcached_batch_packet) - sizeof(struct mehcached_request) * (size_t)packet->num_requests;
+
+#ifdef NETBENCH_SERVER_MEHCACHED
+                struct mehcached_table *partition = state->partitions[partition_id];
+                //struct mehcached_request *requests = (struct mehcached_request *)packet->data;
+
+                uint8_t alloc_id;
+                if (partition_id < state->server_conf->num_partitions)
+                    // alloc_id = (uint8_t)((MEHCACHED_CONCURRENT_TABLE_WRITE(state->server_conf, partition_id) && !MEHCACHED_CONCURRENT_ALLOC_WRITE(state->server_conf, partition_id)) ? (rte_lcore_id() >> 1) : 0);
+                    alloc_id = (uint8_t)((MEHCACHED_CONCURRENT_TABLE_WRITE(state->server_conf, partition_id) && !MEHCACHED_CONCURRENT_ALLOC_WRITE(state->server_conf, partition_id)) ? rte_lcore_id() : 0);
+                else
+                    alloc_id = 0;
+
+                bool readonly;
+                if (thread_id == state->server_conf->partitions[partition_id].thread_id)
+                    readonly = false;
+                else if (MEHCACHED_CONCURRENT_TABLE_WRITE(state->server_conf, partition_id))
+                    readonly = false;
+                else
+                    readonly = true;
+
+#ifdef MEHCACHED_COLLECT_PER_PARTITION_LOAD
+                state->num_per_partition_ops[partition_id] += packet->num_requests;
+#endif
+
+                //mehcached_process_batch(alloc_id, partition, requests, packet->num_requests, packet->data + sizeof(struct mehcached_request) * (size_t)packet->num_requests, new_key_values, &new_key_value_length, readonly);
+#endif
+//#if defined(NETBENCH_SERVER_MEMCACHED) || defined(NETBENCH_SERVER_MASSTREE)
+                uint8_t *out_data_p = new_key_values;
+                const uint8_t *out_data_end = out_data_p + new_key_value_length;
+
+                uint8_t request_index;
+                const uint8_t *in_data_p = packet->data + sizeof(struct mehcached_request) * (size_t)packet->num_requests;
+                for (request_index = 0; request_index < packet->num_requests; request_index++)
+                {
+                    struct mehcached_request *req = (struct mehcached_request *)packet->data + request_index;
+                    size_t key_length = MEHCACHED_KEY_LENGTH(req->kv_length_vec);
+                    size_t value_length = MEHCACHED_VALUE_LENGTH(req->kv_length_vec);
+                    const uint8_t *key = in_data_p;
+                    const uint8_t *value = in_data_p + MEHCACHED_ROUNDUP8(key_length);
+                    //const uint8_t *key = (const uint8_t *)&req->key_hash;
+                    //key_length = sizeof(req->key_hash);
+                    in_data_p += MEHCACHED_ROUNDUP8(key_length) + MEHCACHED_ROUNDUP8(value_length);
+
+                    switch (req->operation)
+                    {
+                        case MEHCACHED_NOOP_READ:
+                        case MEHCACHED_NOOP_WRITE:
+                            {
+                                req->result = MEHCACHED_OK;
+                                req->kv_length_vec = 0;
+                            }
+                            break;
+                        case MEHCACHED_ADD:
+                        case MEHCACHED_SET:
+                            {
+                                if (0)
+                                {
+                                    // for debug: concurrent read/write validation
+                                    uint64_t v = *(uint64_t *)value;
+                                    if ((v & 0xffffffff) != ((~v >> 32) & 0xffffffff))
+                                    {
+                                        static unsigned int p = 0;
+
+                                        if ((p++ & 63) == 0)
+                                            fprintf(stderr, "thread %hhu partition %hu unexpected value being written: %lu %lu\n", thread_id, partition_id, (v & 0xffffffff), ((~v >> 32) & 0xffffffff));
+                                    }
+                                }
+#ifdef NETBENCH_SERVER_MEHCACHED
+                                if (mehcached_set(alloc_id, partition, req->key_hash, key, key_length, value, value_length, req->expire_time, req->operation == MEHCACHED_SET))
+#endif
+                                {
+                                    req->result = MEHCACHED_OK;
+                                }
+                                else
+                                {
+                                    req->result = MEHCACHED_ERROR;
+                                }
+                                req->kv_length_vec = 0;
+                            }
+                            break;
+                        case MEHCACHED_GET:
+                            {
+                                size_t out_value_length = (size_t)(out_data_end - out_data_p);
+                                uint8_t *out_value = out_data_p;
+#ifdef NETBENCH_SERVER_MEHCACHED
+                                if (mehcached_get(alloc_id, partition, req->key_hash, key, key_length, out_value, &out_value_length, &req->expire_time, readonly))
+#endif
+                                {
+                                    req->result = MEHCACHED_OK;
+                                    if (0)
+                                    {
+                                        // for debug: concurrent read/write validation
+                                        uint64_t v = *(uint64_t *)out_value;
+                                        if ((v & 0xffffffff) != ((~v >> 32) & 0xffffffff))
+                                        {
+                                            static unsigned int p = 0;
+                                            if ((p++ & 63) == 0)
+                                                fprintf(stderr, "thread %hhu partition %hu unexpected value being read: %lu %lu\n", thread_id, partition_id, (v & 0xffffffff), ((~v >> 32) & 0xffffffff));
+                                        }
+                                    }
+                                }
+                                else
+                                {
+                                    req->result = MEHCACHED_ERROR;  // TODO: return a correct failure code
+                                    out_value_length = 0;
+                                }
+                                req->kv_length_vec = MEHCACHED_KV_LENGTH_VEC(0, out_value_length);
+                                out_data_p += MEHCACHED_ROUNDUP8(out_value_length);
+                            }
+                            break;
+                        case MEHCACHED_INCREMENT:
+                            {
+                                // TODO: check if the output space is large enough
+                                // TODO: use expire_time
+                                uint64_t increment;
+                                assert(value_length == sizeof(uint64_t));
+                                mehcached_memcpy8((uint8_t *)&increment, value, sizeof(uint64_t));
+                                size_t out_value_length = sizeof(uint64_t);
+                                uint8_t *out_value = out_data_p;
+#ifdef NETBENCH_SERVER_MEHCACHED
+                                if (mehcached_increment(alloc_id, partition, req->key_hash, key, key_length, increment, (uint64_t *)out_value, req->expire_time))
+#endif
+                                    req->result = MEHCACHED_OK;
+                                else
+                                {
+                                    req->result = MEHCACHED_ERROR;  // TODO: return a correct failure code
+                                    out_value_length = 0;
+                                }
+                                req->kv_length_vec = MEHCACHED_KV_LENGTH_VEC(0, out_value_length);
+                                out_data_p += MEHCACHED_ROUNDUP8(out_value_length);
+                            }
+                            break;
+                        default:
+                            fprintf(stderr, "invalid operation or not implemented\n");
+                            break;
+                    }
+                }
+                new_key_value_length = (size_t)(out_data_p - new_key_values);
+//#endif
+
+                // need to modify for ENSO??
+                //rte_memcpy(packet->data + sizeof(struct mehcached_request) * (size_t)packet->num_requests, new_key_values, new_key_value_length);
+                
+                rte_memcpy(response_packet->data + sizeof(struct mehcached_request) * (size_t)packet->num_requests, new_key_values, new_key_value_length);
+
+                // need to modify for ENSO
+                // accumulate data for TX pipe
+                setPacketToTxPipe(state, &rxTxState);
+                rxTxState.pending_tx.current_tx_buffer = getNextPkt(rxTxState.pending_tx.current_tx_buffer);
+                rxTxState.pending_tx.count++;
+		        //mehcached_remote_send_response(state, mbuf, port_id);
+                stage3_index++;
+            }
+        }
+        
+        // after processing all packet send TX
+        rte_eth_rx_enso_clear(ensoDevice);
+        uint32_t tx_size = (rxTxState.pending_tx.current_tx_buffer - rxTxState.pending_tx.start_tx_buffer);
+    
+        if (tx_size > 0)
+        {
+            printf("======== Send %u packets, %u bytes to Tx pipe ========\n",rxTxState.pending_tx.count, tx_size);
+            state->bytes_tx += tx_size;
+            rte_eth_tx_enso_burst(ensoDevice, tx_size);
+        }
+            
+        rxTxState.pending_tx.count = 0;
+        fflush(stdout);
+
+        t_end = mehcached_stopwatch_now();
+
+
+    }
+
+#endif
     return 0;
 }
 
@@ -1570,8 +2072,8 @@ mehcached_benchmark_server(int cpu_mode, int port_mode)
     printf("initializing shm\n");
     const size_t page_size = 1048576 * 2;
     const size_t num_numa_nodes = 1;
-    const size_t num_pages_to_try = 3072;// 4GB //16384;
-    const size_t num_pages_to_reserve = 3072 - 1024;//16384 - 2048;	// give 2048 pages to dpdk
+    const size_t num_pages_to_try = 2048; //3072;// 4GB //16384;
+    const size_t num_pages_to_reserve = 2048 - 1024;//16384 - 2048;	// give 2048 pages to dpdk
 
     mehcached_shm_init(page_size, num_numa_nodes, num_pages_to_try, num_pages_to_reserve);
 
@@ -1580,7 +2082,7 @@ mehcached_benchmark_server(int cpu_mode, int port_mode)
     #else
     // preallocate hugepage num = 3072, 6GB
     // const size_t num_hugepage = 2048; 
-    const size_t num_hugepage = 3072*2;
+    const size_t num_hugepage = 2048*2;
      // define hugepage 
     char memory_str[10];
     snprintf(memory_str, sizeof(memory_str), "%zu", (num_hugepage));   // * 2 is because the used huge page size is 2 MB
@@ -1975,6 +2477,26 @@ printf("configuring mappings\n");
 
     size_t mem_diff = mehcached_get_memuse() - mem_start;
     printf("memory:   %10.2lf MB\n", (double)mem_diff * 0.000001);
+
+
+    // test thread_id only 0
+    EnsoDevice_t* ensoDevice = rte_eth_enso_device_init(0, 0);
+
+    int notif_ret = rte_eth_notif_init(ensoDevice);
+    int rx_enso_ret = rte_eth_rx_enso_init(ensoDevice);
+    int tx_enso_ret = rte_eth_tx_enso_init(ensoDevice);
+
+    states[0]->ensoDevice = ensoDevice;
+
+    if(notif_ret < 0 || rx_enso_ret < 0 || tx_enso_ret < 0)
+    {
+        printf("failed to initialize ENSO\n");
+        return 0;
+    }
+    else
+        printf("======finish initializing ENSO buffer======\n");
+
+    
     
    
     printf("running servers\n");
@@ -1987,15 +2509,15 @@ printf("configuring mappings\n");
     sigaction(SIGTERM, &new_action, NULL);
 
     // print stat about dpdk malloc_heap
-    rte_malloc_dump_stats(stdout, NULL);
-    rte_malloc_dump_heaps(stdout);
-    fflush(stdout);
+    // rte_malloc_dump_stats(stdout, NULL);
+    // rte_malloc_dump_heaps(stdout);
+    // fflush(stdout);
 
     // use this for diagnosis (the actual server will not be run)
     // mehcached_diagnosis(server_conf);
      /* If we are in simulation, take checkpoint here. */
 #ifdef _GEM5_
-    system("cat /proc/meminfo | grep -i huge"); // check rte_zmalloc using hugepage
+    // system("cat /proc/meminfo | grep -i huge"); // check rte_zmalloc using hugepage
     fprintf(stderr, "Taking post-initialization checkpoint.\n");
     system("m5 checkpoint");
     //m5_checkpoint(0,0);
