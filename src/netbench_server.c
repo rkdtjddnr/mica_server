@@ -118,9 +118,6 @@ struct server_state
     uint64_t last_num_per_partition_ops[NUM_PART];
     uint16_t packet_size;
     
-    #ifdef USE_ENSO
-    EnsoDevice_t* ensoDevice;
-    #endif
 
 #ifdef MEHCACHED_USE_SOFT_FDIR
     // struct rte_ring *soft_fdir_mailbox[NUM_THREAD] __rte_cache_aligned;
@@ -574,6 +571,45 @@ mehcached_benchmark_server_proc(void *arg)
 #endif
 
     size_t next_port_index = 0;
+
+    #ifdef USE_ENSO
+    // test thread_id only 0
+    // ENSO Initializing
+    // assume only 1 port
+    /*=============== Enso Initializing ===============*/
+    EnsoDevice_t* ensoDevice = rte_eth_enso_device_init(thread_id, 0);
+    
+    uint32_t target_size = 1536*enso_pipeline_size; // allocate size for TX buffer, need to change??
+    
+    int notif_ret = rte_eth_notif_init(ensoDevice);
+    int rx_enso_ret = rte_eth_rx_enso_init(ensoDevice);
+    int tx_enso_ret = rte_eth_tx_enso_init(ensoDevice);
+
+    struct RXTXState rxTxState;
+    rxTxState.pending_tx.count = 0;
+    rxTxState.pending_tx.current_tx_buffer = NULL;
+    rxTxState.pending_tx.start_tx_buffer = NULL;
+    MicaProcessingUnit_t mica_unit;
+
+    if(notif_ret < 0 || rx_enso_ret < 0 || tx_enso_ret < 0)
+    {
+        printf("failed to initialize ENSO\n");
+        return 0;
+    }
+    else
+        printf("======finish initializing ENSO buffer======\n");
+
+
+    /*=============== Enso Initializing finished ===============*/
+
+    #endif
+
+#ifdef _GEM5_
+    // system("cat /proc/meminfo | grep -i huge"); // check rte_zmalloc using hugepage
+    fprintf(stderr, "Taking post-initialization checkpoint.\n");
+    system("m5 checkpoint");
+    //m5_checkpoint(0,0);
+#endif
 
     printf("DPDK-version of mica is ready to accept requests!\n");
     printf("DPDK-version of mica burst size is %d \n", MEHCACHED_MAX_PKT_BURST);
@@ -1423,34 +1459,7 @@ mehcached_benchmark_server_proc(void *arg)
 
 #else
 
-    // ENSO Initializing
-    // assume only 1 port
-    /*=============== Enso Initializing ===============*/
-    EnsoDevice_t* ensoDevice = state->ensoDevice;// rte_eth_enso_device_init(thread_id, 0);
-    struct RXTXState rxTxState;
-    rxTxState.pending_tx.count = 0;
-    rxTxState.pending_tx.current_tx_buffer = NULL;
-    rxTxState.pending_tx.start_tx_buffer = NULL;
     
-    
-    uint32_t target_size = 1536*enso_pipeline_size; // allocate size for TX buffer, need to change??
-    
-    // int notif_ret = rte_eth_notif_init(ensoDevice);
-    // int rx_enso_ret = rte_eth_rx_enso_init(ensoDevice);
-    // int tx_enso_ret = rte_eth_tx_enso_init(ensoDevice);
-
-    // if(notif_ret < 0 || rx_enso_ret < 0 || tx_enso_ret < 0)
-    // {
-    //     printf("failed to initialize ENSO\n");
-    //     return 0;
-    // }
-    // else
-    //     printf("======finish initializing ENSO buffer======\n");
-
-    MicaProcessingUnit_t mica_unit;
-
-    /*=============== Enso Initializing finished ===============*/
-
     while (!exiting)
     {
         // invariant: 0 <= stage3_index <= stage2_index <= stage1_index <= stage0_index <= packet_count <= pipeline_size
@@ -2479,26 +2488,6 @@ printf("configuring mappings\n");
     printf("memory:   %10.2lf MB\n", (double)mem_diff * 0.000001);
 
 
-    // test thread_id only 0
-    EnsoDevice_t* ensoDevice = rte_eth_enso_device_init(0, 0);
-
-    int notif_ret = rte_eth_notif_init(ensoDevice);
-    int rx_enso_ret = rte_eth_rx_enso_init(ensoDevice);
-    int tx_enso_ret = rte_eth_tx_enso_init(ensoDevice);
-
-    states[0]->ensoDevice = ensoDevice;
-
-    if(notif_ret < 0 || rx_enso_ret < 0 || tx_enso_ret < 0)
-    {
-        printf("failed to initialize ENSO\n");
-        return 0;
-    }
-    else
-        printf("======finish initializing ENSO buffer======\n");
-
-    
-    
-   
     printf("running servers\n");
 
     struct sigaction new_action;
@@ -2516,12 +2505,7 @@ printf("configuring mappings\n");
     // use this for diagnosis (the actual server will not be run)
     // mehcached_diagnosis(server_conf);
      /* If we are in simulation, take checkpoint here. */
-#ifdef _GEM5_
-    // system("cat /proc/meminfo | grep -i huge"); // check rte_zmalloc using hugepage
-    fprintf(stderr, "Taking post-initialization checkpoint.\n");
-    system("m5 checkpoint");
-    //m5_checkpoint(0,0);
-#endif
+
 
     for (thread_id = 1; thread_id < server_conf->num_threads; thread_id++)
     {
