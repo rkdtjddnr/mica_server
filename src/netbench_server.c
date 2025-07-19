@@ -1560,12 +1560,25 @@ mehcached_benchmark_server_proc(void *arg)
 
         // SW, change arraysize -> enso burst size 1024
         // stage0
-        struct mehcached_batch_packet *packets[enso_pipeline_size];
+        #ifdef USE_ENSO
+        // + 1 for NULL packet
+        struct mehcached_batch_packet *packets[enso_pipeline_size + 1];
+
         // stage1
         // stage1 & stage2
 #ifdef NETBENCH_SERVER_MEHCACHED
-        struct mehcached_prefetch_state prefetch_state[enso_pipeline_size][MEHCACHED_MAX_BATCH_SIZE];
+        struct mehcached_prefetch_state prefetch_state[enso_pipeline_size + 1][MEHCACHED_MAX_BATCH_SIZE];
 #endif
+        #else
+         struct mehcached_batch_packet *packets[pipeline_size];
+
+        // stage1
+        // stage1 & stage2
+#ifdef NETBENCH_SERVER_MEHCACHED
+        struct mehcached_prefetch_state prefetch_state[max_pending_packets][MEHCACHED_MAX_BATCH_SIZE];
+#endif
+        #endif
+
         uint8_t port_id = thread_conf->port_ids[next_port_index];
 
         // SW, Enso logic
@@ -1580,6 +1593,7 @@ mehcached_benchmark_server_proc(void *arg)
         assert(buf);
         if(new_byte == 0) continue;
         printf("======== Recieve %u bytes from Rx pipe ========\n", new_byte);
+        printf("[DEBUG] receive buf address: %p\n", buf);
 
         // set up tx buffer
         uint8_t* tx_buf = rte_eth_alloc_tx_buffer(ensoDevice, target_size);
@@ -1587,6 +1601,8 @@ mehcached_benchmark_server_proc(void *arg)
         rxTxState.pending_tx.current_tx_buffer = tx_buf;
         rxTxState.pending_tx.start_tx_buffer = tx_buf;
         setProcessingUnit(ensoDevice->rx_pipe, &mica_unit, new_byte, buf, enso_pipeline_size);
+        printf("[DEBUG] mica_unit->buf %p \n", mica_unit.addr);
+
 
 
         t_end = mehcached_stopwatch_now();
@@ -1613,12 +1629,12 @@ mehcached_benchmark_server_proc(void *arg)
                 if (packets[stage0_index] != NULL)
                 {
                     dumpRxPktInfo(packets[stage0_index]);
-                    //printf("  [Stage0] limit pkt %u , prefetch %u pkt\n", mica_unit.end, stage0_index);
+                    printf("[Stage0] limit pkt %u , prefetch %u pkt\n", mica_unit.end, stage0_index);
                     stage0_index++;
                 }
                 else
                 {
-                    //printf("  [Stage0] NULL packet returned! limit %u , current %u\n", mica_unit.end, stage0_index);
+                    printf("[Stage0] NULL packet returned! limit %u , current %u\n", mica_unit.end, stage0_index);
                     // current stage0 ptr to NULL so, -1
                 }        
             }
@@ -1837,6 +1853,7 @@ mehcached_benchmark_server_proc(void *arg)
         
         // after processing all packet send TX
         rte_eth_rx_enso_clear(ensoDevice);
+        printf("[DEBUG] host update pipe SW head to NIC!!\n");
         uint32_t tx_size = (rxTxState.pending_tx.current_tx_buffer - rxTxState.pending_tx.start_tx_buffer);
     
         if (tx_size > 0)
