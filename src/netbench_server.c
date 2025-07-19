@@ -219,6 +219,8 @@ mehcached_remote_send_response(struct server_state *state, struct rte_mbuf *mbuf
     ip->total_length = rte_cpu_to_be_16((uint16_t)(packet_length - sizeof(struct rte_ether_hdr)));
     udp->dgram_len = rte_cpu_to_be_16((uint16_t)(packet_length - sizeof(struct rte_ether_hdr) - sizeof(struct rte_ipv4_hdr)));
 
+    // printf("IP Total Length:      %u bytes (network to host converted)\n", rte_be_to_cpu_16(ip->total_length));
+
     mbuf->data_len = packet_length;
     mbuf->pkt_len = (uint32_t)packet_length;
     mbuf->next = NULL;
@@ -322,6 +324,50 @@ setProcessingUnit(RxEnsoPipe_t* rx_pipe, MicaProcessingUnit_t* mica_unit, uint32
 
 }
 
+void dump_hex(const char *label, const uint8_t *data, uint32_t len) {
+    printf("    %s (len=%u): ", label, len);
+    for (uint32_t i = 0; i < len; i++) {
+        printf("%02x", data[i]);
+    }
+    printf("\n");
+}
+
+void dumpRxPktInfo(const struct mehcached_batch_packet *packet)
+{
+    printf("=== Dumping mehcached_batch_packet ===\n");
+    printf("Num Requests: %u\n", packet->num_requests);
+
+    const struct mehcached_request *req = (const struct mehcached_request *)packet->data;
+    const uint8_t *key_ptr = packet->data + sizeof(struct mehcached_request) * packet->num_requests;
+
+    for (uint8_t i = 0; i < packet->num_requests; i++) {
+        const struct mehcached_request* rx_req = req + i;
+
+        uint32_t key_len_raw = MEHCACHED_KEY_LENGTH(rx_req->kv_length_vec);
+        uint32_t val_len_raw = MEHCACHED_VALUE_LENGTH(rx_req->kv_length_vec);
+
+        uint32_t key_len_rounded = MEHCACHED_ROUNDUP8(key_len_raw);
+        uint32_t val_len_rounded = MEHCACHED_ROUNDUP8(val_len_raw);
+
+        printf("[Request %u]\n", i);
+        printf("Key Hash:     0x%lx\n", rx_req->key_hash);
+        printf("Expire Time:  0x%x\n", rx_req->expire_time);
+
+        if (rx_req->operation == MEHCACHED_GET) {
+            printf("Operation:    GET\n");
+            dump_hex("Key", key_ptr, key_len_raw);
+        } else if (rx_req->operation == MEHCACHED_SET) {
+            printf("Operation:    SET\n");
+            dump_hex("Key", key_ptr, key_len_raw);
+            dump_hex("Value", key_ptr + key_len_rounded, val_len_raw);
+        } else {
+            printf("Operation:    UNKNOWN (%u)\n", rx_req->operation);
+        }
+
+        key_ptr += key_len_rounded + val_len_rounded;
+    }
+}
+
 uint16_t be_to_le_16(const uint16_t le) {
   return ((le & (uint16_t)0x00ff) << 8) | ((le & (uint16_t)0xff00) >> 8);
 }
@@ -330,7 +376,7 @@ uint16_t get_pkt_len(const uint8_t* addr) {
     const struct rte_ether_hdr* l2_hdr = (struct rte_ether_hdr*)addr;
     const struct rte_ipv4_hdr* l3_hdr = (struct rte_ipv4_hdr*)(l2_hdr + 1);
     const uint16_t total_len = be_to_le_16(l3_hdr->total_length) + sizeof(struct rte_ether_hdr);
-    //printf("[DEBUG] host get_pkt_len func total_len %u \n", total_len);
+    printf("[DEBUG] host get_pkt_len func total_len %u \n", total_len);
     
     return total_len;
 }
@@ -467,7 +513,7 @@ setPacketToTxPipe(struct server_state *state, struct RXTXState* rx_tx_state)
     ip->total_length = rte_cpu_to_be_16((uint16_t)(packet_length - sizeof(struct rte_ether_hdr)));
     udp->dgram_len = rte_cpu_to_be_16((uint16_t)(packet_length - sizeof(struct rte_ether_hdr) - sizeof(struct rte_ipv4_hdr)));
 
-    printf("IP Total Length:      %u bytes (network to host converted)\n", rte_be_to_cpu_16(ip->total_length));
+    // printf("IP Total Length:      %u bytes (network to host converted)\n", rte_be_to_cpu_16(ip->total_length));
 
 }
 #endif
@@ -657,6 +703,11 @@ mehcached_benchmark_server_proc(void *arg)
     uint32_t set_f = 0;
     uint32_t acc_p = 0;
     #endif
+
+    uint32_t counter_d = 0;
+    uint32_t get_s = 0;
+    uint32_t get_f = 0;
+    uint32_t acc_p = 0;
 
 #ifndef USE_ENSO
     while (!exiting)
@@ -1557,9 +1608,11 @@ mehcached_benchmark_server_proc(void *arg)
                 //struct rte_mbuf *mbuf = packet_mbufs[stage0_index];
 
                 packets[stage0_index] = getPacketFromRxPipe(&mica_unit);
+                
                 //rte_pktmbuf_mtod(mbuf, struct mehcached_batch_packet *);
                 if (packets[stage0_index] != NULL)
                 {
+                    dumpRxPktInfo(packets[stage0_index]);
                     //printf("  [Stage0] limit pkt %u , prefetch %u pkt\n", mica_unit.end, stage0_index);
                     stage0_index++;
                 }
@@ -1706,9 +1759,9 @@ mehcached_benchmark_server_proc(void *arg)
 #endif
                                 {
                                     req->result = MEHCACHED_OK;
-                                    uint64_t v = *(uint64_t *)out_value;
-                                    printf("[GET] Req success\n");
-                                    printf("value 0x%lx\n", v);
+                                    //debug
+                                    get_s++;
+
 
                                     if (0)
                                     {
@@ -1726,6 +1779,8 @@ mehcached_benchmark_server_proc(void *arg)
                                 {
                                     req->result = MEHCACHED_ERROR;  // TODO: return a correct failure code
                                     out_value_length = 0;
+                                    //debug
+                                    get_f++;
                                 }
                                 req->kv_length_vec = MEHCACHED_KV_LENGTH_VEC(0, out_value_length);
                                 out_data_p += MEHCACHED_ROUNDUP8(out_value_length);
@@ -1775,6 +1830,8 @@ mehcached_benchmark_server_proc(void *arg)
                 rxTxState.pending_tx.count++;
 		        //mehcached_remote_send_response(state, mbuf, port_id);
                 stage3_index++;
+                //debug
+                counter_d++;
             }
         }
         
@@ -1789,8 +1846,19 @@ mehcached_benchmark_server_proc(void *arg)
             rte_eth_tx_enso_burst(ensoDevice, tx_size);
         }
             
+        acc_p += rxTxState.pending_tx.count;
+
         rxTxState.pending_tx.count = 0;
-        fflush(stdout);
+        //fflush(stdout);
+
+        if((counter_d > 0) && (counter_d % 512 == 0))
+        {
+            printf("------acc statistics------\n");
+            printf("Acc packet %u\n", acc_p);
+            printf("GET success %u\n", get_s);
+            printf("GET failed %u\n", get_f);
+            fflush(stdout);
+        }
 
         t_end = mehcached_stopwatch_now();
 

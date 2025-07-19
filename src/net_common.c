@@ -296,6 +296,8 @@ mehcached_send_packet(uint8_t port_id, struct rte_mbuf *mbuf)
 	if (state->tx_length == MEHCACHED_MAX_PKT_BURST)
 	{
 		uint16_t count = rte_eth_tx_burst(port_id, queue, state->tx_mbufs, MEHCACHED_MAX_PKT_BURST);
+
+		//printf("======== Send %u packets, to NIC ========\n",MEHCACHED_MAX_PKT_BURST);
 		state->num_tx_sent += count;
 		state->num_tx_dropped += (uint64_t)(MEHCACHED_MAX_PKT_BURST - count);
 		for (; count < MEHCACHED_MAX_PKT_BURST; count++)
