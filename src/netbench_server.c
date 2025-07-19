@@ -353,7 +353,7 @@ getPacketFromRxPipe(MicaProcessingUnit_t* mica_unit)
         mica_unit->addr = mica_unit->next_addr;
         if(mica_unit->addr >= mica_unit->end_of_buffer)
         {
-            printf("[WARN] addr reached end_of_buffer, received=%u\n",mica_unit->received);
+            //printf("[WARN] addr reached end_of_buffer, received=%u\n",mica_unit->received);
             mica_unit->end = mica_unit->received;
             return NULL;
         }
@@ -368,16 +368,66 @@ getPacketFromRxPipe(MicaProcessingUnit_t* mica_unit)
     }
     else
     {
-        printf("[WARN] complete processing %u pkts\n", mica_unit->received);
+        //printf("[WARN] complete processing %u pkts\n", mica_unit->received);
         mica_unit->end = mica_unit->received;
         return NULL;
     }
 }
 
-void
-setPacketToTxPipe(struct server_state *state, struct RXTXState* rxTxState)
+// Cpy Ether, IP, UDP, Request Header of RX to TX
+void cpyHeaderRxToTx(struct RXTXState* rx_tx_state, struct mehcached_batch_packet* rx_packet)
 {
-    struct mehcached_batch_packet *packet = (struct mehcached_batch_packet *)rxTxState->pending_tx.current_tx_buffer;
+    assert(rx_tx_state);
+    assert(rx_packet);
+    struct mehcached_batch_packet* tx_res = (struct mehcached_batch_packet *)rx_tx_state->pending_tx.current_tx_buffer;
+
+    tx_res->num_requests = rx_packet->num_requests;
+
+    // Set ethernet, ip, udp header...
+    // RX packet
+    struct rte_ether_hdr* rx_eth = (struct rte_ether_hdr *)rx_packet;
+    struct rte_ipv4_hdr* rx_ip = (struct rte_ipv4_hdr*)(rx_eth + 1);
+    struct rte_udp_hdr* rx_udp = (struct rte_udp_hdr*)(rx_ip + 1);
+    // TX packet
+    struct rte_ether_hdr* tx_eth = (struct rte_ether_hdr *)rx_tx_state->pending_tx.current_tx_buffer;
+    struct rte_ipv4_hdr* tx_ip = (struct rte_ipv4_hdr*)(tx_eth + 1);
+    struct rte_udp_hdr* tx_udp = (struct rte_udp_hdr*)(tx_ip + 1);
+
+    // swap source and destination
+    tx_eth->s_addr = rx_eth->d_addr;
+    tx_eth->d_addr = rx_eth->s_addr;
+
+    tx_ip->dst_addr = rx_ip->src_addr;
+    tx_ip->src_addr = rx_ip->dst_addr;
+
+    tx_udp->dst_port = rx_udp->src_port;
+    tx_udp->src_port = rx_udp->dst_port;
+    
+
+    // for multiple request
+    for (int request_idx = 0; request_idx < rx_packet->num_requests; request_idx++)
+    {
+        struct mehcached_request* rx_req = (struct mehcached_request *)rx_packet->data + request_idx;
+        struct mehcached_request* tx_req = (struct mehcached_request *)tx_res->data + request_idx;
+        // Operation result
+        tx_req->operation = rx_req->operation;
+        tx_req->result = rx_req->result;
+        tx_req->key_hash = rx_req->key_hash;
+        tx_req->kv_length_vec = rx_req->kv_length_vec;
+        tx_req->expire_time = rx_req->expire_time;
+
+        // Else...
+        tx_req->reserved0 = 0;
+        tx_req->reserved1 = rx_req->reserved1;
+        
+    }
+    
+}
+
+void
+setPacketToTxPipe(struct server_state *state, struct RXTXState* rx_tx_state)
+{
+    struct mehcached_batch_packet *packet = (struct mehcached_batch_packet *)rx_tx_state->pending_tx.current_tx_buffer;
     
     // update stats
     uint8_t request_index;
@@ -397,7 +447,7 @@ setPacketToTxPipe(struct server_state *state, struct RXTXState* rxTxState)
         next_key += MEHCACHED_ROUNDUP8(MEHCACHED_KEY_LENGTH(req->kv_length_vec)) + MEHCACHED_ROUNDUP8(MEHCACHED_VALUE_LENGTH(req->kv_length_vec));
     }
 
-    struct rte_ether_hdr *eth = (struct rte_ether_hdr *)rxTxState->pending_tx.current_tx_buffer;
+    struct rte_ether_hdr *eth = (struct rte_ether_hdr *)rx_tx_state->pending_tx.current_tx_buffer;
     struct rte_ipv4_hdr *ip = (struct rte_ipv4_hdr *)((unsigned char *)eth + sizeof(struct rte_ether_hdr));
     struct rte_udp_hdr *udp = (struct rte_udp_hdr *)((unsigned char *)ip + sizeof(struct rte_ipv4_hdr));
 
@@ -411,28 +461,13 @@ setPacketToTxPipe(struct server_state *state, struct RXTXState* rxTxState)
 
     // TODO: update IP checksum
 
-    // swap source and destination
-    {
-        struct rte_ether_addr t = eth->s_addr;
-        eth->s_addr = eth->d_addr;
-        eth->d_addr = t;
-    }
-    {
-        uint32_t t = ip->src_addr;
-        ip->src_addr = ip->dst_addr;
-        ip->dst_addr = t;
-    }
-    {
-        uint16_t t = udp->src_port;
-        udp->src_port = udp->dst_port;
-        udp->dst_port = t;
-    }
-
     // reset TTL
     ip->time_to_live = 64;
 
     ip->total_length = rte_cpu_to_be_16((uint16_t)(packet_length - sizeof(struct rte_ether_hdr)));
     udp->dgram_len = rte_cpu_to_be_16((uint16_t)(packet_length - sizeof(struct rte_ether_hdr) - sizeof(struct rte_ipv4_hdr)));
+
+    printf("IP Total Length:      %u bytes (network to host converted)\n", rte_be_to_cpu_16(ip->total_length));
 
 }
 #endif
@@ -1525,14 +1560,13 @@ mehcached_benchmark_server_proc(void *arg)
                 //rte_pktmbuf_mtod(mbuf, struct mehcached_batch_packet *);
                 if (packets[stage0_index] != NULL)
                 {
-                    printf("  [Stage0] limit pkt %u , prefetch %u pkt\n", mica_unit.end, stage0_index);
+                    //printf("  [Stage0] limit pkt %u , prefetch %u pkt\n", mica_unit.end, stage0_index);
                     stage0_index++;
                 }
                 else
                 {
-                    printf("  [Stage0] NULL packet returned! limit %u , current %u\n", mica_unit.end, stage0_index);
+                    //printf("  [Stage0] NULL packet returned! limit %u , current %u\n", mica_unit.end, stage0_index);
                     // current stage0 ptr to NULL so, -1
-                    stage0_index--;
                 }        
             }
             else if (stage1_index < stage0_index && stage1_index - stage2_index < stage_gap)
@@ -1672,6 +1706,10 @@ mehcached_benchmark_server_proc(void *arg)
 #endif
                                 {
                                     req->result = MEHCACHED_OK;
+                                    uint64_t v = *(uint64_t *)out_value;
+                                    printf("[GET] Req success\n");
+                                    printf("value 0x%lx\n", v);
+
                                     if (0)
                                     {
                                         // for debug: concurrent read/write validation
@@ -1729,6 +1767,8 @@ mehcached_benchmark_server_proc(void *arg)
                 rte_memcpy(response_packet->data + sizeof(struct mehcached_request) * (size_t)packet->num_requests, new_key_values, new_key_value_length);
 
                 // need to modify for ENSO
+                // Cpy ether,ip,upd,request header rx->tx
+                cpyHeaderRxToTx(&rxTxState, packet);
                 // accumulate data for TX pipe
                 setPacketToTxPipe(state, &rxTxState);
                 rxTxState.pending_tx.current_tx_buffer = getNextPkt(rxTxState.pending_tx.current_tx_buffer);
@@ -2108,7 +2148,7 @@ mehcached_benchmark_server(int cpu_mode, int port_mode)
    char *rte_argv[] = {"",
         "-l", "0",
         "-n", "4",    // 4 for server 
-        "-m", memory_str,
+        //"-m", memory_str,
         //"--log-level=pmd.tx,debug",
         //"--log-level=pmd.rx,debug",
         //"--log-level=ethdev,debug",
