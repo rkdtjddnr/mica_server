@@ -392,7 +392,7 @@ uint8_t* getNextPkt(uint8_t* pkt)
 }
 
 struct mehcached_batch_packet* 
-getPacketFromRxPipe(MicaProcessingUnit_t* mica_unit)
+getPacketFromRxPipe(MicaProcessingUnit_t* mica_unit, RxEnsoPipe_t* rx_pipe)
 {
     if((mica_unit->missing_messages > 0) && (mica_unit->remaining_bytes > 0))
     {
@@ -405,6 +405,9 @@ getPacketFromRxPipe(MicaProcessingUnit_t* mica_unit)
         }
         mica_unit->next_addr = getNextPkt(mica_unit->next_addr);
         uint32_t consumed = mica_unit->next_addr - mica_unit->addr;
+
+        // update rx_pipe tail
+        rte_eth_rx_confirm_byte(rx_pipe, consumed);
 
         mica_unit->remaining_bytes -= consumed;
         --mica_unit->missing_messages;
@@ -1623,7 +1626,7 @@ mehcached_benchmark_server_proc(void *arg)
             {
                 //struct rte_mbuf *mbuf = packet_mbufs[stage0_index];
 
-                packets[stage0_index] = getPacketFromRxPipe(&mica_unit);
+                packets[stage0_index] = getPacketFromRxPipe(&mica_unit, ensoDevice->rx_pipe);
                 
                 //rte_pktmbuf_mtod(mbuf, struct mehcached_batch_packet *);
                 if (packets[stage0_index] != NULL)
