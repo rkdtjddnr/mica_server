@@ -376,7 +376,7 @@ uint16_t get_pkt_len(const uint8_t* addr) {
     const struct rte_ether_hdr* l2_hdr = (struct rte_ether_hdr*)addr;
     const struct rte_ipv4_hdr* l3_hdr = (struct rte_ipv4_hdr*)(l2_hdr + 1);
     const uint16_t total_len = be_to_le_16(l3_hdr->total_length) + sizeof(struct rte_ether_hdr);
-    printf("[DEBUG] host get_pkt_len func total_len %u \n", total_len);
+    //printf("[DEBUG] host get_pkt_len func total_len %u \n", total_len);
     
     return total_len;
 }
@@ -687,13 +687,6 @@ mehcached_benchmark_server_proc(void *arg)
     /*=============== Enso Initializing finished ===============*/
 
     #endif
-
-#ifdef _GEM5_
-    // system("cat /proc/meminfo | grep -i huge"); // check rte_zmalloc using hugepage
-    fprintf(stderr, "Taking post-initialization checkpoint.\n");
-    system("m5 checkpoint");
-    //m5_checkpoint(0,0);
-#endif
 
     printf("DPDK-version of mica is ready to accept requests!\n");
     printf("DPDK-version of mica burst size is %d \n", MEHCACHED_MAX_PKT_BURST);
@@ -1596,17 +1589,14 @@ mehcached_benchmark_server_proc(void *arg)
         assert(buf);
         if(new_byte == 0) continue;
         printf("======== Recieve %u bytes from Rx pipe ========\n", new_byte);
-        printf("[DEBUG] receive buf address: %p\n", buf);
-
+        
         // set up tx buffer
         uint8_t* tx_buf = rte_eth_alloc_tx_buffer(ensoDevice, target_size);
         assert(tx_buf);
         rxTxState.pending_tx.current_tx_buffer = tx_buf;
         rxTxState.pending_tx.start_tx_buffer = tx_buf;
         setProcessingUnit(ensoDevice->rx_pipe, &mica_unit, new_byte, buf, enso_pipeline_size);
-        printf("[DEBUG] mica_unit->buf %p \n", mica_unit.addr);
-
-
+        
 
         t_end = mehcached_stopwatch_now();
         
@@ -1631,13 +1621,16 @@ mehcached_benchmark_server_proc(void *arg)
                 //rte_pktmbuf_mtod(mbuf, struct mehcached_batch_packet *);
                 if (packets[stage0_index] != NULL)
                 {
-                    //dumpRxPktInfo(packets[stage0_index]);
-                    printf("[Stage0] limit pkt %u , prefetch %u pkt\n", mica_unit.end, stage0_index);
+                    if(counter_d >= 0 && counter_d < 64)
+                        dumpRxPktInfo(packets[stage0_index]);
+                    else if(counter_d > 32767 && counter_d < 32832)
+                        dumpRxPktInfo(packets[stage0_index]);
+                    //printf("[Stage0] limit pkt %u , prefetch %u pkt\n", mica_unit.end, stage0_index);
                     stage0_index++;
                 }
                 else
                 {
-                    printf("[Stage0] NULL packet returned! limit %u , current %u\n", mica_unit.end, stage0_index);
+                    //printf("[Stage0] NULL packet returned! limit %u , current %u\n", mica_unit.end, stage0_index);
                     // current stage0 ptr to NULL so, -1
                 }        
             }
@@ -2213,8 +2206,8 @@ mehcached_benchmark_server(int cpu_mode, int port_mode)
     const size_t num_pages_to_try = 4096;//2048; //3072;// 4GB //16384;
     const size_t num_pages_to_reserve = 4096 - 2048;//16384 - 2048;	// give 2048 pages to dpdk
     #else
-    const size_t num_pages_to_try = 2048; //3072;// 4GB //16384;
-    const size_t num_pages_to_reserve = 2048 - 1024;//16384 - 2048;	// give 2048 pages to dpdk
+    const size_t num_pages_to_try = 3072; //3072;// 4GB //16384;
+    const size_t num_pages_to_reserve = 3072 - 1536;//16384 - 2048;	// give 2048 pages to dpdk
     #endif
     mehcached_shm_init(page_size, num_numa_nodes, num_pages_to_try, num_pages_to_reserve);
 
@@ -2637,6 +2630,12 @@ printf("configuring mappings\n");
     // use this for diagnosis (the actual server will not be run)
     // mehcached_diagnosis(server_conf);
      /* If we are in simulation, take checkpoint here. */
+#ifdef _GEM5_
+    // system("cat /proc/meminfo | grep -i huge"); // check rte_zmalloc using hugepage
+    fprintf(stderr, "Taking post-initialization checkpoint.\n");
+    system("m5 checkpoint");
+    //m5_checkpoint(0,0);
+#endif
 
 
     for (thread_id = 1; thread_id < server_conf->num_threads; thread_id++)
