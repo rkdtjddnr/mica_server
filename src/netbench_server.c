@@ -688,6 +688,13 @@ mehcached_benchmark_server_proc(void *arg)
 
     #endif
 
+#ifdef _GEM5_
+    // system("cat /proc/meminfo | grep -i huge"); // check rte_zmalloc using hugepage
+    fprintf(stderr, "Taking post-initialization checkpoint.\n");
+    system("m5 checkpoint");
+    //m5_checkpoint(0,0);
+#endif
+
     printf("DPDK-version of mica is ready to accept requests!\n");
     printf("DPDK-version of mica burst size is %d \n", MEHCACHED_MAX_PKT_BURST);
 
@@ -2206,8 +2213,8 @@ mehcached_benchmark_server(int cpu_mode, int port_mode)
     const size_t num_pages_to_try = 4096;//2048; //3072;// 4GB //16384;
     const size_t num_pages_to_reserve = 4096 - 2048;//16384 - 2048;	// give 2048 pages to dpdk
     #else
-    const size_t num_pages_to_try = 3072; //3072;// 4GB //16384;
-    const size_t num_pages_to_reserve = 3072 - 1536;//16384 - 2048;	// give 2048 pages to dpdk
+    const size_t num_pages_to_try = 2048; //3072;// 4GB //16384;
+    const size_t num_pages_to_reserve = 2048 - 1024;//16384 - 2048;	// give 2048 pages to dpdk
     #endif
     mehcached_shm_init(page_size, num_numa_nodes, num_pages_to_try, num_pages_to_reserve);
 
@@ -2630,13 +2637,6 @@ printf("configuring mappings\n");
     // use this for diagnosis (the actual server will not be run)
     // mehcached_diagnosis(server_conf);
      /* If we are in simulation, take checkpoint here. */
-#ifdef _GEM5_
-    // system("cat /proc/meminfo | grep -i huge"); // check rte_zmalloc using hugepage
-    fprintf(stderr, "Taking post-initialization checkpoint.\n");
-    system("m5 checkpoint");
-    //m5_checkpoint(0,0);
-#endif
-
 
     for (thread_id = 1; thread_id < server_conf->num_threads; thread_id++)
     {
