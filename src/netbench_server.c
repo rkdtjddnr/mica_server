@@ -1628,7 +1628,7 @@ mehcached_benchmark_server_proc(void *arg)
                 //rte_pktmbuf_mtod(mbuf, struct mehcached_batch_packet *);
                 if (packets[stage0_index] != NULL)
                 {
-                    dumpRxPktInfo(packets[stage0_index]);
+                    //dumpRxPktInfo(packets[stage0_index]);
                     printf("[Stage0] limit pkt %u , prefetch %u pkt\n", mica_unit.end, stage0_index);
                     stage0_index++;
                 }
@@ -1853,7 +1853,7 @@ mehcached_benchmark_server_proc(void *arg)
         
         // after processing all packet send TX
         rte_eth_rx_enso_clear(ensoDevice);
-        printf("[DEBUG] host update pipe SW head to NIC!!\n");
+        //printf("[DEBUG] host update pipe SW head to NIC!!\n");
         uint32_t tx_size = (rxTxState.pending_tx.current_tx_buffer - rxTxState.pending_tx.start_tx_buffer);
     
         if (tx_size > 0)
@@ -2206,9 +2206,13 @@ mehcached_benchmark_server(int cpu_mode, int port_mode)
     printf("initializing shm\n");
     const size_t page_size = 1048576 * 2;
     const size_t num_numa_nodes = 1;
+    #ifdef USE_ENSO
+    const size_t num_pages_to_try = 4096;//2048; //3072;// 4GB //16384;
+    const size_t num_pages_to_reserve = 4096 - 2048;//16384 - 2048;	// give 2048 pages to dpdk
+    #else
     const size_t num_pages_to_try = 2048; //3072;// 4GB //16384;
     const size_t num_pages_to_reserve = 2048 - 1024;//16384 - 2048;	// give 2048 pages to dpdk
-
+    #endif
     mehcached_shm_init(page_size, num_numa_nodes, num_pages_to_try, num_pages_to_reserve);
 
     char memory_str[10];
@@ -2233,7 +2237,7 @@ mehcached_benchmark_server(int cpu_mode, int port_mode)
    char *rte_argv[] = {"",
         "-l", "0",
         "-n", "4",    // 4 for server 
-        //"-m", memory_str,
+        "-m", memory_str,
         //"--log-level=pmd.tx,debug",
         //"--log-level=pmd.rx,debug",
         //"--log-level=ethdev,debug",
