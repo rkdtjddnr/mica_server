@@ -688,12 +688,7 @@ mehcached_benchmark_server_proc(void *arg)
 
     #endif
 
-#ifdef _GEM5_
-    // system("cat /proc/meminfo | grep -i huge"); // check rte_zmalloc using hugepage
-    fprintf(stderr, "Taking post-initialization checkpoint.\n");
-    system("m5 checkpoint");
-    //m5_checkpoint(0,0);
-#endif
+
 
     printf("DPDK-version of mica is ready to accept requests!\n");
     printf("DPDK-version of mica burst size is %d \n", MEHCACHED_MAX_PKT_BURST);
@@ -1628,10 +1623,10 @@ mehcached_benchmark_server_proc(void *arg)
                 //rte_pktmbuf_mtod(mbuf, struct mehcached_batch_packet *);
                 if (packets[stage0_index] != NULL)
                 {
-                    if(counter_d >= 0 && counter_d < 64)
-                        dumpRxPktInfo(packets[stage0_index]);
-                    else if(counter_d > 32767 && counter_d < 32832)
-                        dumpRxPktInfo(packets[stage0_index]);
+                    // if(counter_d >= 0 && counter_d < 64)
+                    //     dumpRxPktInfo(packets[stage0_index]);
+                    // else if(counter_d > 32767 && counter_d < 32832)
+                    //     dumpRxPktInfo(packets[stage0_index]);
                     //printf("[Stage0] limit pkt %u , prefetch %u pkt\n", mica_unit.end, stage0_index);
                     stage0_index++;
                 }
@@ -1869,16 +1864,7 @@ mehcached_benchmark_server_proc(void *arg)
         acc_p += rxTxState.pending_tx.count;
 
         rxTxState.pending_tx.count = 0;
-        //fflush(stdout);
-
-        if((counter_d > 0) && (counter_d % 512 == 0))
-        {
-            printf("------acc statistics------\n");
-            printf("Acc packet %u\n", acc_p);
-            printf("GET success %u\n", get_s);
-            printf("GET failed %u\n", get_f);
-            fflush(stdout);
-        }
+        fflush(stdout);
 
         t_end = mehcached_stopwatch_now();
 
@@ -2636,7 +2622,7 @@ printf("configuring mappings\n");
 
     // use this for diagnosis (the actual server will not be run)
     // mehcached_diagnosis(server_conf);
-     /* If we are in simulation, take checkpoint here. */
+    
 
     for (thread_id = 1; thread_id < server_conf->num_threads; thread_id++)
     {
@@ -2644,6 +2630,16 @@ printf("configuring mappings\n");
 	    rte_eal_launch(mehcached_benchmark_server_proc, states, (unsigned int)thread_id);
     }
     rte_eal_launch(mehcached_benchmark_server_proc, states, 0);
+
+
+    /* If we are in simulation, take checkpoint here. */
+#ifdef _GEM5_
+    // system("cat /proc/meminfo | grep -i huge"); // check rte_zmalloc using hugepage
+    fprintf(stderr, "Taking post-initialization checkpoint.\n");
+    system("m5 checkpoint");
+    //m5_checkpoint(0,0);
+#endif
+
 
     rte_eal_mp_wait_lcore();
 
