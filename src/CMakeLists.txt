@@ -161,6 +161,7 @@ link_libraries(
         -l:librte_port.a
         -ldl
         -lm
+        #-l:libm5
         -latomic
         -lpthread)
 

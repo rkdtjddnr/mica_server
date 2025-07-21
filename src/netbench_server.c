@@ -2199,8 +2199,8 @@ mehcached_benchmark_server(int cpu_mode, int port_mode)
     const size_t num_pages_to_try = 4096;//2048; //3072;// 4GB //16384;
     const size_t num_pages_to_reserve = 4096 - 2048;//16384 - 2048;	// give 2048 pages to dpdk
     #else
-    const size_t num_pages_to_try = 2048; //3072;// 4GB //16384;
-    const size_t num_pages_to_reserve = 2048 - 1024;//16384 - 2048;	// give 2048 pages to dpdk
+    const size_t num_pages_to_try = 3072; //3072;// 4GB //16384;
+    const size_t num_pages_to_reserve = 3072 - 1024;//16384 - 2048;	// give 2048 pages to dpdk
     #endif
     mehcached_shm_init(page_size, num_numa_nodes, num_pages_to_try, num_pages_to_reserve);
 
@@ -2622,16 +2622,6 @@ printf("configuring mappings\n");
 
     // use this for diagnosis (the actual server will not be run)
     // mehcached_diagnosis(server_conf);
-    
-
-    for (thread_id = 1; thread_id < server_conf->num_threads; thread_id++)
-    {
-	    if (!rte_lcore_is_enabled(thread_id)) continue;
-	    rte_eal_launch(mehcached_benchmark_server_proc, states, (unsigned int)thread_id);
-    }
-    rte_eal_launch(mehcached_benchmark_server_proc, states, 0);
-
-
     /* If we are in simulation, take checkpoint here. */
 #ifdef _GEM5_
     // system("cat /proc/meminfo | grep -i huge"); // check rte_zmalloc using hugepage
@@ -2639,6 +2629,14 @@ printf("configuring mappings\n");
     system("m5 checkpoint");
     //m5_checkpoint(0,0);
 #endif
+
+    
+    for (thread_id = 1; thread_id < server_conf->num_threads; thread_id++)
+    {
+	    if (!rte_lcore_is_enabled(thread_id)) continue;
+	    rte_eal_launch(mehcached_benchmark_server_proc, states, (unsigned int)thread_id);
+    }
+    rte_eal_launch(mehcached_benchmark_server_proc, states, 0);
 
 
     rte_eal_mp_wait_lcore();
