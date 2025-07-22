@@ -118,6 +118,9 @@ struct server_state
     uint64_t last_num_per_partition_ops[NUM_PART];
     uint16_t packet_size;
     
+    #ifdef USE_ENSO
+    EnsoDevice_t* enso_device;
+    #endif
 
 #ifdef MEHCACHED_USE_SOFT_FDIR
     // struct rte_ring *soft_fdir_mailbox[NUM_THREAD] __rte_cache_aligned;
@@ -531,14 +534,14 @@ mehcached_benchmark_server_proc(void *arg)
     //printf("[SERVER] thread id = %u\n", thread_id);
     struct server_state *state = states[thread_id];
     if (state->server_conf == NULL) {
-	printf("[ERROR] server_conf is NULL in state[%u]\n", thread_id);
-	abort();
+	    printf("[ERROR] server_conf is NULL in state[%u]\n", thread_id);
+	    abort();
     }
 
     struct mehcached_server_conf *server_conf = state->server_conf;
     if (server_conf->threads == NULL) {
-	printf("[ERROR] server_conf->threads is NULL\n");
-	abort();
+        printf("[ERROR] server_conf->threads is NULL\n");
+        abort();
     }
 
     struct mehcached_server_thread_conf *thread_conf = &server_conf->threads[thread_id];
@@ -661,27 +664,28 @@ mehcached_benchmark_server_proc(void *arg)
     // ENSO Initializing
     // assume only 1 port
     /*=============== Enso Initializing ===============*/
-    EnsoDevice_t* ensoDevice = rte_eth_enso_device_init(thread_id, 0);
+    //EnsoDevice_t* ensoDevice = rte_eth_enso_device_init(thread_id, 0);
     
+    //int notif_ret = rte_eth_notif_init(ensoDevice);
+    //int rx_enso_ret = rte_eth_rx_enso_init(ensoDevice);
+    //int tx_enso_ret = rte_eth_tx_enso_init(ensoDevice);
+
+    // if(notif_ret < 0 || rx_enso_ret < 0 || tx_enso_ret < 0)
+    // {
+    //     printf("failed to initialize ENSO\n");
+    //     return 0;
+    // }
+    // else
+    //     printf("======finish initializing ENSO buffer======\n");
+
+    EnsoDevice_t* ensoDevice = state->enso_device;
     uint32_t target_size = 1536*enso_pipeline_size; // allocate size for TX buffer, need to change??
-    
-    int notif_ret = rte_eth_notif_init(ensoDevice);
-    int rx_enso_ret = rte_eth_rx_enso_init(ensoDevice);
-    int tx_enso_ret = rte_eth_tx_enso_init(ensoDevice);
 
     struct RXTXState rxTxState;
     rxTxState.pending_tx.count = 0;
     rxTxState.pending_tx.current_tx_buffer = NULL;
     rxTxState.pending_tx.start_tx_buffer = NULL;
     MicaProcessingUnit_t mica_unit;
-
-    if(notif_ret < 0 || rx_enso_ret < 0 || tx_enso_ret < 0)
-    {
-        printf("failed to initialize ENSO\n");
-        return 0;
-    }
-    else
-        printf("======finish initializing ENSO buffer======\n");
 
 
     /*=============== Enso Initializing finished ===============*/
@@ -2199,8 +2203,8 @@ mehcached_benchmark_server(int cpu_mode, int port_mode)
     const size_t num_pages_to_try = 4096;//2048; //3072;// 4GB //16384;
     const size_t num_pages_to_reserve = 4096 - 2048;//16384 - 2048;	// give 2048 pages to dpdk
     #else
-    const size_t num_pages_to_try = 3072; //3072;// 4GB //16384;
-    const size_t num_pages_to_reserve = 3072 - 1024;//16384 - 2048;	// give 2048 pages to dpdk
+    const size_t num_pages_to_try = 2048; //3072;// 4GB //16384;
+    const size_t num_pages_to_reserve = 2048 - 1024;//16384 - 2048;	// give 2048 pages to dpdk
     #endif
     mehcached_shm_init(page_size, num_numa_nodes, num_pages_to_try, num_pages_to_reserve);
 
@@ -2339,6 +2343,7 @@ printf("configuring mappings\n");
     }
 #endif
 
+    #ifndef USE_ENSO
     printf("cleaning up pending packets\n");
     for (thread_id = 1; thread_id < server_conf->num_threads; thread_id++)
     {
@@ -2347,7 +2352,7 @@ printf("configuring mappings\n");
     rte_eal_launch(mehcached_benchmark_consume_packets_proc, (void *)(size_t)server_conf->num_ports, 0);
 
     rte_eal_mp_wait_lcore();
-
+    #endif
 
     for (port_id = 0; port_id < server_conf->num_ports; port_id++)
         rte_eth_stats_reset(port_id);
@@ -2604,7 +2609,35 @@ printf("configuring mappings\n");
 
     size_t mem_diff = mehcached_get_memuse() - mem_start;
     printf("memory:   %10.2lf MB\n", (double)mem_diff * 0.000001);
+    
+    #ifdef USE_ENSO
+    EnsoDevice_t* enso_device_array[NUM_CORE];
 
+    /*=============== Enso Initializing ===============*/
+    for (thread_id = 0; thread_id < server_conf->num_threads; thread_id++)
+    {
+        //EnsoDevice_t* ensoDevice = rte_eth_enso_device_init(thread_id, 0);
+        enso_device_array[thread_id] = rte_eth_enso_device_init(thread_id, 0);
+    
+        int notif_ret = rte_eth_notif_init(enso_device_array[thread_id]);
+        int rx_enso_ret = rte_eth_rx_enso_init(enso_device_array[thread_id]);
+        int tx_enso_ret = rte_eth_tx_enso_init(enso_device_array[thread_id]);
+
+
+        if(notif_ret < 0 || rx_enso_ret < 0 || tx_enso_ret < 0)
+        {
+            printf("failed to initialize ENSO\n");
+            return 0;
+        }
+        else
+        {
+            printf("======finish initializing ENSO buffer[%d]======\n", thread_id);
+            states[thread_id]->enso_device = enso_device_array[thread_id];
+        }     
+    }
+
+    /*=============== Enso Initializing finished ===============*/
+    #endif
 
     printf("running servers\n");
 
@@ -2623,13 +2656,13 @@ printf("configuring mappings\n");
     // use this for diagnosis (the actual server will not be run)
     // mehcached_diagnosis(server_conf);
     /* If we are in simulation, take checkpoint here. */
+
 #ifdef _GEM5_
     // system("cat /proc/meminfo | grep -i huge"); // check rte_zmalloc using hugepage
     fprintf(stderr, "Taking post-initialization checkpoint.\n");
     system("m5 checkpoint");
     //m5_checkpoint(0,0);
 #endif
-
     
     for (thread_id = 1; thread_id < server_conf->num_threads; thread_id++)
     {
@@ -2637,7 +2670,6 @@ printf("configuring mappings\n");
 	    rte_eal_launch(mehcached_benchmark_server_proc, states, (unsigned int)thread_id);
     }
     rte_eal_launch(mehcached_benchmark_server_proc, states, 0);
-
 
     rte_eal_mp_wait_lcore();
 

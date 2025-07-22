@@ -29,12 +29,12 @@
 #define NUM_QUEUE 1 // number of queue
 
 
-#define NUM_THREAD 1 // number of thread
-#define NUM_PART 1 // number of partition
+#define NUM_THREAD NUM_QUEUE // number of thread
+#define NUM_PART NUM_QUEUE // number of partition, same as NUM_QUEUE
 #define MAC_SZ 6 // mac addr array size
 #define IP_SZ 4 // ip addr array size
 
-#define NUM_CORE 1
+#define NUM_CORE NUM_QUEUE // same as NUM_QUEUE
 #define KEY_LEN 8 
 #define VAL_LEN 8
 #define NUM_ITEMS 1048576 //12*1048576 //8192 //1048576 / 16 -> per core
