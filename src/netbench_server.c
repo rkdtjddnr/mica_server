@@ -2250,7 +2250,7 @@ mehcached_benchmark_server(int cpu_mode, int port_mode)
    char *rte_argv[] = {"",
         "-l", "0",
         "-n", "4",    // 4 for server 
-        "-m", memory_str,
+        //"-m", memory_str,
         //"--log-level=pmd.tx,debug",
         //"--log-level=pmd.rx,debug",
         //"--log-level=ethdev,debug",
@@ -2395,7 +2395,7 @@ printf("configuring mappings\n");
         #ifndef USE_NOT_SHM
         struct server_state *state = mehcached_shm_malloc_contiguous(sizeof(struct server_state), thread_id);
         #else
-        struct server_state *state = rte_zmalloc(NULL, sizeof(struct server_state), 0);
+        struct server_state *state = rte_zmalloc(NULL, sizeof(struct server_state), MICA_CACHE_LINE_SIZE);
         #endif
         if (state == NULL)
             printf("[ERROR] Memory allocation for server_state failed!!\n");
@@ -2479,7 +2479,7 @@ printf("configuring mappings\n");
         #ifndef USE_NOT_SHM 
         partitions[partition_id] = mehcached_shm_malloc_contiguous(sizeof(struct mehcached_table), thread_id);
         #else
-        partitions[partition_id] = rte_zmalloc(NULL, sizeof(struct mehcached_table), 0);
+        partitions[partition_id] = rte_zmalloc(NULL, sizeof(struct mehcached_table), MICA_CACHE_LINE_SIZE);
         #endif
         if (partitions[partition_id] == NULL)
         {
@@ -2525,7 +2525,7 @@ printf("configuring mappings\n");
         #ifndef USE_NOT_SHM
         partitions[partition_id] = mehcached_shm_malloc_contiguous(sizeof(struct mehcached_table), thread_id);
         #else
-        partitions[partition_id] = rte_zmalloc(NULL, sizeof(struct mehcached_table), 0);
+        partitions[partition_id] = rte_zmalloc(NULL, sizeof(struct mehcached_table), MICA_CACHE_LINE_SIZE);
         #endif
         if (partitions[partition_id] == NULL)
             printf("[ERROR] Memory allocation for partition failed!!\n");

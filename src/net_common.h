@@ -41,6 +41,8 @@
 #define RTE_TEST_RX_DESC_DEFAULT (1024)
 #define RTE_TEST_TX_DESC_DEFAULT (1024)
 
+#define MICA_CACHE_LINE_SIZE 64
+
 struct rte_mbuf *
 mehcached_packet_alloc();
 

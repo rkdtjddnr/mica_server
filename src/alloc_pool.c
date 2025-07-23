@@ -106,7 +106,7 @@ mehcached_pool_init(struct mehcached_pool *alloc, uint64_t size, bool concurrent
     
 
     //alloc->data = malloc(size + MEHCACHED_MINIMUM_POOL_SIZE);
-    alloc->data = rte_zmalloc(NULL, size + MEHCACHED_MINIMUM_POOL_SIZE, 0);
+    alloc->data = rte_zmalloc(NULL, size + MEHCACHED_MINIMUM_POOL_SIZE, 64);
     if (alloc->data == NULL)
     {
         printf("failed to allocate memory\n");

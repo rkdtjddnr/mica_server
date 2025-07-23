@@ -1501,7 +1501,7 @@ mehcached_table_init(struct mehcached_table *table, size_t num_buckets, size_t n
 
     // 메모리 할당 (shared memory 대신 일반 메모리 할당)
     //table->buckets = (struct mehcached_bucket *)malloc(table_size);
-    table->buckets = (struct mehcached_bucket *)rte_zmalloc(NULL, table_size, 0);
+    table->buckets = (struct mehcached_bucket *)rte_zmalloc(NULL, table_size, 64);
     if (table->buckets == NULL)
     {
         printf("Failed to allocate memory\n");
