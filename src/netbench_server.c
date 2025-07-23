@@ -406,7 +406,7 @@ uint8_t* getNextPkt(uint8_t* pkt)
     uint32_t pkt_len = get_pkt_len(pkt);
     //uint32_t pkt_len = getMemcPktLen(pkt); // for memcached
     uint32_t nb_flits = (pkt_len - 1) / 64 + 1;
-    printf("[DEBUG] pkt_len: %u, nb_flits: %u\n", pkt_len, nb_flits);
+    //printf("[DEBUG] pkt_len: %u, nb_flits: %u\n", pkt_len, nb_flits);
 
     return pkt + nb_flits * 64;
 }
@@ -696,6 +696,7 @@ mehcached_benchmark_server_proc(void *arg)
     //     printf("======finish initializing ENSO buffer======\n");
 
     EnsoDevice_t* ensoDevice = state->enso_device;
+    // debugging
     dumpDeviceInfo(ensoDevice);
 
     uint32_t target_size = 1536*enso_pipeline_size; // allocate size for TX buffer, need to change??
@@ -1646,10 +1647,25 @@ mehcached_benchmark_server_proc(void *arg)
                 //rte_pktmbuf_mtod(mbuf, struct mehcached_batch_packet *);
                 if (packets[stage0_index] != NULL)
                 {
-                    // if(counter_d >= 0 && counter_d < 64)
-                    //     dumpRxPktInfo(packets[stage0_index]);
-                    // else if(counter_d > 32767 && counter_d < 32832)
-                    //     dumpRxPktInfo(packets[stage0_index]);
+                    // for debugging
+                    // check if wrap-arounded rx buf is updated with new packet
+                    if(counter_d >= 0 && counter_d < 8)
+                    {
+                        dumpRxPktInfo(packets[stage0_index]);
+                    }
+                    else if(counter_d > 16383 && counter_d < 16392)
+                    {
+                        dumpRxPktInfo(packets[stage0_index]);
+                    }    
+                    else if(counter_d > 32767 && counter_d < 32776)
+                    {
+                        dumpRxPktInfo(packets[stage0_index]);
+                    }
+                    else if(counter_d > 49151 && counter_d < 49160)
+                    {
+                        dumpRxPktInfo(packets[stage0_index]);
+                    }
+                        
                     //printf("[Stage0] limit pkt %u , prefetch %u pkt\n", mica_unit.end, stage0_index);
                     stage0_index++;
                 }
@@ -1864,7 +1880,6 @@ mehcached_benchmark_server_proc(void *arg)
                 // accumulate data for TX pipe
                 setPacketToTxPipe(state, &rxTxState);
                 rxTxState.pending_tx.current_tx_buffer = getNextPkt(rxTxState.pending_tx.current_tx_buffer);
-                printf("===========Packet===========\n");
                 rxTxState.pending_tx.count++;
 		        //mehcached_remote_send_response(state, mbuf, port_id);
                 stage3_index++;
@@ -1889,6 +1904,15 @@ mehcached_benchmark_server_proc(void *arg)
 
         rxTxState.pending_tx.count = 0;
         fflush(stdout);
+
+        if((counter_d > 0) && (counter_d % 16384 == 0))
+        {
+            printf("------acc statistics------\n");
+            printf("Acc packet %u\n", acc_p);
+            printf("GET success %u\n", get_s);
+            printf("GET failed %u\n", get_f);
+            fflush(stdout);
+        }
 
         t_end = mehcached_stopwatch_now();
 
