@@ -314,7 +314,7 @@ typedef struct MicaProcessingUnit
 EnsoDevice_t* enso_device_array[NUM_CORE];
 
 void
-setProcessingUnit(RxEnsoPipe_t* rx_pipe, MicaProcessingUnit_t* mica_unit, uint32_t new_rx_bytes, uint8_t* new_rx_buf, int32_t burst_size)
+set_processing_unit(RxEnsoPipe_t* rx_pipe, MicaProcessingUnit_t* mica_unit, uint32_t new_rx_bytes, uint8_t* new_rx_buf, int32_t burst_size)
 {
     mica_unit->rx_buf = new_rx_buf;
     mica_unit->avail_bytes = new_rx_bytes;
@@ -338,7 +338,7 @@ void dump_hex(const char *label, const uint8_t *data, uint32_t len) {
     printf("\n");
 }
 
-void dumpRxPktInfo(const struct mehcached_batch_packet *packet)
+void dump_rx_pkt_info(const struct mehcached_batch_packet *packet)
 {
     printf("=== Dumping mehcached_batch_packet ===\n");
     printf("Num Requests: %u\n", packet->num_requests);
@@ -375,7 +375,7 @@ void dumpRxPktInfo(const struct mehcached_batch_packet *packet)
 }
 
 void
-dumpDeviceInfo(EnsoDevice_t* device)
+dump_device_info(EnsoDevice_t* device)
 {
     printf("========= NotifPair info ==========\n");
     printf("RX notif buf addr %p\n", (void*)device->notif_pair->rx_buf);
@@ -388,31 +388,8 @@ dumpDeviceInfo(EnsoDevice_t* device)
     printf("TX pipe pysical %lx\n", device->tx_pipe->buf_phys_addr);
 }
 
-uint16_t be_to_le_16(const uint16_t le) {
-  return ((le & (uint16_t)0x00ff) << 8) | ((le & (uint16_t)0xff00) >> 8);
-}
-
-uint16_t get_pkt_len(const uint8_t* addr) {
-    const struct rte_ether_hdr* l2_hdr = (struct rte_ether_hdr*)addr;
-    const struct rte_ipv4_hdr* l3_hdr = (struct rte_ipv4_hdr*)(l2_hdr + 1);
-    const uint16_t total_len = be_to_le_16(l3_hdr->total_length) + sizeof(struct rte_ether_hdr);
-    //printf("[DEBUG] host get_pkt_len func total_len %u \n", total_len);
-    
-    return total_len;
-}
-
-uint8_t* getNextPkt(uint8_t* pkt)
-{
-    uint32_t pkt_len = get_pkt_len(pkt);
-    //uint32_t pkt_len = getMemcPktLen(pkt); // for memcached
-    uint32_t nb_flits = (pkt_len - 1) / 64 + 1;
-    //printf("[DEBUG] pkt_len: %u, nb_flits: %u\n", pkt_len, nb_flits);
-
-    return pkt + nb_flits * 64;
-}
-
 struct mehcached_batch_packet* 
-getPacketFromRxPipe(MicaProcessingUnit_t* mica_unit, RxEnsoPipe_t* rx_pipe)
+get_packet_from_rx_pipe(MicaProcessingUnit_t* mica_unit, RxEnsoPipe_t* rx_pipe)
 {
     if((mica_unit->missing_messages > 0) && (mica_unit->remaining_bytes > 0))
     {
@@ -423,7 +400,7 @@ getPacketFromRxPipe(MicaProcessingUnit_t* mica_unit, RxEnsoPipe_t* rx_pipe)
             mica_unit->end = mica_unit->received;
             return NULL;
         }
-        mica_unit->next_addr = getNextPkt(mica_unit->next_addr);
+        mica_unit->next_addr = get_next_pkt(mica_unit->next_addr);
         uint32_t consumed = mica_unit->next_addr - mica_unit->addr;
 
         // update rx_pipe tail
@@ -444,7 +421,7 @@ getPacketFromRxPipe(MicaProcessingUnit_t* mica_unit, RxEnsoPipe_t* rx_pipe)
 }
 
 // Cpy Ether, IP, UDP, Request Header of RX to TX
-void cpyHeaderRxToTx(struct RXTXState* rx_tx_state, struct mehcached_batch_packet* rx_packet)
+void cpy_header_rx_to_tx(struct RXTXState* rx_tx_state, struct mehcached_batch_packet* rx_packet)
 {
     assert(rx_tx_state);
     assert(rx_packet);
@@ -494,7 +471,7 @@ void cpyHeaderRxToTx(struct RXTXState* rx_tx_state, struct mehcached_batch_packe
 }
 
 void
-setPacketToTxPipe(struct server_state *state, struct RXTXState* rx_tx_state)
+set_packet_to_tx_pipe(struct server_state *state, struct RXTXState* rx_tx_state)
 {
     struct mehcached_batch_packet *packet = (struct mehcached_batch_packet *)rx_tx_state->pending_tx.current_tx_buffer;
     
@@ -681,23 +658,24 @@ mehcached_benchmark_server_proc(void *arg)
     // ENSO Initializing
     // assume only 1 port
     /*=============== Enso Initializing ===============*/
-    // EnsoDevice_t* ensoDevice = rte_eth_enso_device_init(thread_id, 0);
+    /*
+    EnsoDevice_t* ensoDevice = rte_eth_enso_device_init(thread_id, 0);
     
-    // int notif_ret = rte_eth_notif_init(ensoDevice);
-    // int rx_enso_ret = rte_eth_rx_enso_init(ensoDevice);
-    // int tx_enso_ret = rte_eth_tx_enso_init(ensoDevice);
+    int notif_ret = rte_eth_notif_init(ensoDevice);
+    int rx_enso_ret = rte_eth_rx_enso_init(ensoDevice);
+    int tx_enso_ret = rte_eth_tx_enso_init(ensoDevice);
 
-    // if(notif_ret < 0 || rx_enso_ret < 0 || tx_enso_ret < 0)
-    // {
-    //     printf("failed to initialize ENSO\n");
-    //     return 0;
-    // }
-    // else
-    //     printf("======finish initializing ENSO buffer======\n");
-
+    if(notif_ret < 0 || rx_enso_ret < 0 || tx_enso_ret < 0)
+    {
+        printf("failed to initialize ENSO\n");
+        return 0;
+    }
+    else
+        printf("======finish initializing ENSO buffer======\n");
+    */
     EnsoDevice_t* ensoDevice = state->enso_device;
     // debugging
-    dumpDeviceInfo(ensoDevice);
+    dump_device_info(ensoDevice);
 
     uint32_t target_size = 1536*enso_pipeline_size; // allocate size for TX buffer, need to change??
 
@@ -1621,7 +1599,7 @@ mehcached_benchmark_server_proc(void *arg)
         assert(tx_buf);
         rxTxState.pending_tx.current_tx_buffer = tx_buf;
         rxTxState.pending_tx.start_tx_buffer = tx_buf;
-        setProcessingUnit(ensoDevice->rx_pipe, &mica_unit, new_byte, buf, enso_pipeline_size);
+        set_processing_unit(ensoDevice->rx_pipe, &mica_unit, new_byte, buf, enso_pipeline_size);
         
 
         t_end = mehcached_stopwatch_now();
@@ -1642,29 +1620,31 @@ mehcached_benchmark_server_proc(void *arg)
             {
                 //struct rte_mbuf *mbuf = packet_mbufs[stage0_index];
 
-                packets[stage0_index] = getPacketFromRxPipe(&mica_unit, ensoDevice->rx_pipe);
+                packets[stage0_index] = get_packet_from_rx_pipe(&mica_unit, ensoDevice->rx_pipe);
                 
                 //rte_pktmbuf_mtod(mbuf, struct mehcached_batch_packet *);
                 if (packets[stage0_index] != NULL)
                 {
                     // for debugging
                     // check if wrap-arounded rx buf is updated with new packet
+                    /*
                     if(counter_d >= 0 && counter_d < 8)
                     {
-                        dumpRxPktInfo(packets[stage0_index]);
+                        dump_rx_pkt_info(packets[stage0_index]);
                     }
                     else if(counter_d > 16383 && counter_d < 16392)
                     {
-                        dumpRxPktInfo(packets[stage0_index]);
+                        dump_rx_pkt_info(packets[stage0_index]);
                     }    
                     else if(counter_d > 32767 && counter_d < 32776)
                     {
-                        dumpRxPktInfo(packets[stage0_index]);
+                        dump_rx_pkt_info(packets[stage0_index]);
                     }
                     else if(counter_d > 49151 && counter_d < 49160)
                     {
-                        dumpRxPktInfo(packets[stage0_index]);
+                        dump_rx_pkt_info(packets[stage0_index]);
                     }
+                    */
                         
                     //printf("[Stage0] limit pkt %u , prefetch %u pkt\n", mica_unit.end, stage0_index);
                     stage0_index++;
@@ -1876,10 +1856,10 @@ mehcached_benchmark_server_proc(void *arg)
 
                 // need to modify for ENSO
                 // Cpy ether,ip,upd,request header rx->tx
-                cpyHeaderRxToTx(&rxTxState, packet);
+                cpy_header_rx_to_tx(&rxTxState, packet);
                 // accumulate data for TX pipe
-                setPacketToTxPipe(state, &rxTxState);
-                rxTxState.pending_tx.current_tx_buffer = getNextPkt(rxTxState.pending_tx.current_tx_buffer);
+                set_packet_to_tx_pipe(state, &rxTxState);
+                rxTxState.pending_tx.current_tx_buffer = get_next_pkt(rxTxState.pending_tx.current_tx_buffer);
                 rxTxState.pending_tx.count++;
 		        //mehcached_remote_send_response(state, mbuf, port_id);
                 stage3_index++;
@@ -1905,6 +1885,7 @@ mehcached_benchmark_server_proc(void *arg)
         rxTxState.pending_tx.count = 0;
         fflush(stdout);
 
+        /*
         if((counter_d > 0) && (counter_d % 16384 == 0))
         {
             printf("------acc statistics------\n");
@@ -1913,7 +1894,7 @@ mehcached_benchmark_server_proc(void *arg)
             printf("GET failed %u\n", get_f);
             fflush(stdout);
         }
-
+        */
         t_end = mehcached_stopwatch_now();
 
 
