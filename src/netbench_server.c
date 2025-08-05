@@ -383,12 +383,13 @@ dump_device_info(EnsoDevice_t* device)
     printf("RX notif buf addr %p\n", (void*)device->notif_pair->rx_buf);
     printf("TX notif buf addr %p\n", (void*)device->notif_pair->tx_buf);
     printf("========= RX pipe info ==========\n");
-    printf("RX pipe buf addr %p \n", (void*)device->rx_pipe->buf);
-    printf("RX pipe pysical %lx\n", device->rx_pipe->buf_phys_addr);
+    printf("RX pipe buf addr %p \n", (void*)device->cur_rx_pipe->buf);
+    printf("RX pipe pysical %lx\n", device->cur_rx_pipe->buf_phys_addr);
     printf("========= TX pipe info ==========\n");
-    printf("TX pipe buf addr %p \n", (void*)device->tx_pipe->buf);
-    printf("TX pipe pysical %lx\n", device->tx_pipe->buf_phys_addr);
+    printf("TX pipe buf addr %p \n", (void*)device->cur_tx_pipe->buf);
+    printf("TX pipe pysical %lx\n", device->cur_tx_pipe->buf_phys_addr);
 }
+
 
 struct mehcached_batch_packet* 
 get_packet_from_rx_pipe(MicaProcessingUnit_t* mica_unit, RxEnsoPipe_t* rx_pipe)
