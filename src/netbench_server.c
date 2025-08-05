@@ -1851,7 +1851,7 @@ mehcached_benchmark_server_proc(void *arg)
             
         rx_tx_state.pending_tx.count = 0;
 
-        mica_tx_pipe_rr_idx = (mica_tx_pipe_rr_idx + 1) % TX_PIPE_SIZE;
+        mica_tx_pipe_rr_idx = (mica_tx_pipe_rr_idx + 1) % MICA_TX_PIPE;
 
     }
 
@@ -2613,7 +2613,7 @@ printf("configuring mappings\n");
 			}
 		}
 
-		for (int tx_idx = 0; tx_idx < TX_PIPE_SIZE; tx_idx++) {
+		for (int tx_idx = 0; tx_idx < MICA_TX_PIPE; tx_idx++) {
 			int ret = rte_eth_tx_enso_init(enso_device_array[thread_id], tx_idx);
 			if (ret < 0) {
 				printf("TX Enso init failed for idx %d\n", tx_idx);
