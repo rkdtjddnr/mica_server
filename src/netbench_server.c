@@ -670,7 +670,7 @@ mehcached_benchmark_server_proc(void *arg)
     rx_tx_state.pending_tx.start_tx_buffer = NULL;
     MicaProcessingUnit_t mica_unit;
 
-
+    static int mica_tx_pipe_rr_idx = 0;
     /*=============== Enso Initializing finished ===============*/
 
     #endif
@@ -727,7 +727,7 @@ mehcached_benchmark_server_proc(void *arg)
         //     if (packet_count == pipeline_size)
         //         break;
         // }
-        
+
         // receive packets
         // the minimum retrieval interval of 1 us avoids excessive PCIe use, which causes slowdowns in skewed workloads
         // (most cores cause small batches, which reduces available bandwidth for the loaded cores)
@@ -1559,8 +1559,9 @@ mehcached_benchmark_server_proc(void *arg)
         // ENSO running process demo
         uint8_t* buf = NULL;
     
-        uint32_t next_rx = rte_eth_rx_enso_next(enso_device);
-        if(next_rx < 0) continue;
+        enso_device->cur_rx_pipe = rte_eth_rx_enso_pipe_next(enso_device);
+        if(enso_device->cur_rx_pipe == NULL) continue;
+        enso_device->cur_tx_pipe = enso_device->tx_pipe[mica_tx_pipe_rr_idx];
 
         // receive packets
         uint32_t new_byte = rte_eth_rx_enso_burst(enso_device, &buf);
@@ -1573,7 +1574,7 @@ mehcached_benchmark_server_proc(void *arg)
         assert(tx_buf);
         rx_tx_state.pending_tx.current_tx_buffer = tx_buf;
         rx_tx_state.pending_tx.start_tx_buffer = tx_buf;
-        set_processing_unit(enso_device->rx_pipe, &mica_unit, new_byte, buf, enso_pipeline_size);
+        set_processing_unit(enso_device->cur_rx_pipe, &mica_unit, new_byte, buf, enso_pipeline_size);
         
 
         // update RX byte statistics
@@ -1591,7 +1592,7 @@ mehcached_benchmark_server_proc(void *arg)
             {
                 //struct rte_mbuf *mbuf = packet_mbufs[stage0_index];
 
-                packets[stage0_index] = get_packet_from_rx_pipe(&mica_unit, enso_device->rx_pipe);
+                packets[stage0_index] = get_packet_from_rx_pipe(&mica_unit, enso_device->cur_rx_pipe);
                 
                 //rte_pktmbuf_mtod(mbuf, struct mehcached_batch_packet *);
                 if (packets[stage0_index] != NULL)
@@ -1827,8 +1828,8 @@ mehcached_benchmark_server_proc(void *arg)
                 set_packet_to_tx_pipe(state, &rx_tx_state);
                 // need to considering wrap-around
                 rx_tx_state.pending_tx.current_tx_buffer = get_next_pkt(rx_tx_state.pending_tx.current_tx_buffer);
-                if(rx_tx_state.pending_tx.current_tx_buffer >= (enso_device->tx_pipe->buf + ENSO_BUF_SIZE))
-                    rx_tx_state.pending_tx.current_tx_buffer = enso_device->tx_pipe->buf;
+                if(rx_tx_state.pending_tx.current_tx_buffer >= (enso_device->cur_tx_pipe->buf + ENSO_BUF_SIZE))
+                    rx_tx_state.pending_tx.current_tx_buffer = enso_device->cur_tx_pipe->buf;
 
                 rx_tx_state.pending_tx.count++;
 		        //mehcached_remote_send_response(state, mbuf, port_id);
@@ -1849,6 +1850,8 @@ mehcached_benchmark_server_proc(void *arg)
         }
             
         rx_tx_state.pending_tx.count = 0;
+
+        mica_tx_pipe_rr_idx = (mica_tx_pipe_rr_idx + 1) % TX_PIPE_SIZE;
 
     }
 
@@ -2597,20 +2600,30 @@ printf("configuring mappings\n");
         enso_device_array[thread_id] = rte_eth_enso_device_init(thread_id, 0);
     
         int notif_ret = rte_eth_notif_init(enso_device_array[thread_id]);
-        int rx_enso_ret = rte_eth_rx_enso_init(enso_device_array[thread_id]);
-        int tx_enso_ret = rte_eth_tx_enso_init(enso_device_array[thread_id]);
-
-
-        if(notif_ret < 0 || rx_enso_ret < 0 || tx_enso_ret < 0)
-        {
-            printf("failed to initialize ENSO\n");
-            return 0;
+        if (notif_ret < 0) {
+            printf("Notification init failed for thread %d\n", thread_id);
+            return notif_ret;
         }
-        else
-        {
-            printf("======finish initializing ENSO buffer[%d]======\n", thread_id);
-            states[thread_id]->enso_device = enso_device_array[thread_id];
-        }     
+
+        for (int rx_idx = 0; rx_idx < RX_PIPE_SIZE; rx_idx++) {
+			int ret = rte_eth_rx_enso_init(enso_device_array[thread_id], rx_idx);
+			if (ret < 0) {
+				printf("RX Enso init failed for idx %d\n", rx_idx);
+				return ret; 
+			}
+		}
+
+		for (int tx_idx = 0; tx_idx < TX_PIPE_SIZE; tx_idx++) {
+			int ret = rte_eth_tx_enso_init(enso_device_array[thread_id], tx_idx);
+			if (ret < 0) {
+				printf("TX Enso init failed for idx %d\n", tx_idx);
+				return ret; 
+			}
+		}
+
+        printf("======finish initializing ENSO buffer[%d]======\n", thread_id);
+        states[thread_id]->enso_device = enso_device_array[thread_id];
+    
     }
 
     /*=============== Enso Initializing finished ===============*/
