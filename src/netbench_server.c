@@ -2206,12 +2206,12 @@ mehcached_benchmark_server(int cpu_mode, int port_mode)
     char cpu_mask_str[10];
     snprintf(cpu_mask_str, sizeof(cpu_mask_str), "%lx", cpu_mask);
 
-   char core_range[16];
+    char core_range[16];
     if (NUM_QUEUE == 1) {
-        snprintf(core_range, "0");
+        snprintf(core_range, sizeof(core_range), "0");
     } else {
-        snprintf(core_range, "0-%d", NUM_QUEUE - 1);
-    } 
+        snprintf(core_range, sizeof(core_range), "0-%d", NUM_QUEUE - 1);
+    }
     
    char *rte_argv[] = {"",
         "-l", core_range,
