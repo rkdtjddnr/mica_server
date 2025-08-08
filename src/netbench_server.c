@@ -1852,7 +1852,7 @@ mehcached_benchmark_server_proc(void *arg)
             
         rx_tx_state.pending_tx.count = 0;
 
-        mica_tx_pipe_rr_idx = (mica_tx_pipe_rr_idx + 1) % MICA_TX_PIPE;
+        mica_tx_pipe_rr_idx = (mica_tx_pipe_rr_idx + 1) % MICA_PIPE;
 
     }
 
