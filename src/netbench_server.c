@@ -2206,10 +2206,15 @@ mehcached_benchmark_server(int cpu_mode, int port_mode)
     char cpu_mask_str[10];
     snprintf(cpu_mask_str, sizeof(cpu_mask_str), "%lx", cpu_mask);
 
-   
+   char core_range[16];
+    if (NUM_QUEUE == 1) {
+        snprintf(core_range, "0");
+    } else {
+        snprintf(core_range, "0-%d", NUM_QUEUE - 1);
+    } 
     
    char *rte_argv[] = {"",
-        "-l", "0",
+        "-l", core_range,
         "-n", "4",    // 4 for server 
         //"-m", memory_str,
         //"--log-level=pmd.tx,debug",
@@ -2606,19 +2611,17 @@ printf("configuring mappings\n");
             return notif_ret;
         }
 
-        for (int rx_idx = 0; rx_idx < RX_PIPE_SIZE; rx_idx++) {
-			int ret = rte_eth_rx_enso_init(enso_device_array[thread_id], rx_idx);
-			if (ret < 0) {
-				printf("RX Enso init failed for idx %d\n", rx_idx);
-				return ret; 
+        for (int idx = 0; idx < MICA_PIPE; idx++) {
+			int rx_ret = rte_eth_rx_enso_init(enso_device_array[thread_id], idx);
+			if (rx_ret < 0) {
+				printf("RX Enso init failed for idx %d\n", idx);
+				return rx_ret; 
 			}
-		}
 
-		for (int tx_idx = 0; tx_idx < MICA_TX_PIPE; tx_idx++) {
-			int ret = rte_eth_tx_enso_init(enso_device_array[thread_id], tx_idx);
-			if (ret < 0) {
-				printf("TX Enso init failed for idx %d\n", tx_idx);
-				return ret; 
+            int tx_ret = rte_eth_tx_enso_init(enso_device_array[thread_id], idx);
+			if (tx_ret < 0) {
+				printf("TX Enso init failed for idx %d\n", idx);
+				return tx_ret; 
 			}
 		}
 
@@ -2626,6 +2629,11 @@ printf("configuring mappings\n");
         states[thread_id]->enso_device = enso_device_array[thread_id];
     
     }
+
+    printf("ENSO_BUF_SIZE     = %lu bytes (%.2f MB)\n", ENSO_BUF_SIZE, ENSO_BUF_SIZE / (1024.0 * 1024));
+    printf("NOTIF_BUF_SIZE    = %lu bytes (%.2f MB)\n", NOTIF_BUF_SIZE, NOTIF_BUF_SIZE / (1024.0 * 1024));
+    printf("MICA_PIPE         = %d\n", MICA_PIPE);
+	fflush(stdout);
 
     /*=============== Enso Initializing finished ===============*/
     #endif
