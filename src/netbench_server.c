@@ -1566,8 +1566,8 @@ mehcached_benchmark_server_proc(void *arg)
 
         // receive packets
         uint32_t new_byte = rte_eth_rx_enso_burst(enso_device, &buf);
-        assert(buf);
         if(new_byte == 0) continue;
+        assert(buf);
         //printf("======== Recieve %u bytes from Rx pipe ========\n", new_byte);
         
         // set up tx buffer
@@ -2629,12 +2629,6 @@ printf("configuring mappings\n");
         states[thread_id]->enso_device = enso_device_array[thread_id];
     
     }
-
-    printf("ENSO_BUF_SIZE     = %lu bytes (%.2f MB)\n", ENSO_BUF_SIZE, ENSO_BUF_SIZE / (1024.0 * 1024));
-    printf("NOTIF_BUF_SIZE    = %lu bytes (%.2f MB)\n", NOTIF_BUF_SIZE, NOTIF_BUF_SIZE / (1024.0 * 1024));
-    printf("MICA_PIPE         = %d\n", MICA_PIPE);
-	fflush(stdout);
-
     /*=============== Enso Initializing finished ===============*/
     #endif
     
