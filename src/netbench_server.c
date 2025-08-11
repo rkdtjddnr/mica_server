@@ -2618,7 +2618,7 @@ printf("configuring mappings\n");
 				return rx_ret; 
 			}
 
-            int tx_ret = rte_eth_tx_enso_init(enso_device_array[thread_id], idx);
+            int tx_ret = rte_eth_tx_enso_init(enso_device_array[thread_id], idx, NULL);
 			if (tx_ret < 0) {
 				printf("TX Enso init failed for idx %d\n", idx);
 				return tx_ret; 
